@@ -10,7 +10,6 @@
  * file of the most recent `trace run` instead.
  */
 
-import * as NodeChildProcessSpawner from "@effect/platform-node-shared/NodeChildProcessSpawner";
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
 import * as NodeStdio from "@effect/platform-node-shared/NodeStdio";
 import * as NodeTerminal from "@effect/platform-node-shared/NodeTerminal";
@@ -30,6 +29,7 @@ import {
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { crossSpawnSpawnerLayer } from "../src/cross-spawn-spawner.ts";
 import { nodeFileSystemLayer } from "../src/node-platform.ts";
 import {
   defaultTraceDirectory,
@@ -777,7 +777,7 @@ const traceCliLayer = Layer.mergeAll(
   nodeFileSystemLayer,
   NodeStdio.layer,
   NodeTerminal.layer,
-  NodeChildProcessSpawner.layer.pipe(Layer.provide(nodeFileSystemLayer)),
+  crossSpawnSpawnerLayer,
 );
 
 const main = Command.run(traceCommand, { version: "1" }).pipe(

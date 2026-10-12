@@ -31,6 +31,7 @@ import {
   Ref,
   Schema,
 } from "effect";
+import { Type } from "typebox";
 import type { EpisodeOptions } from "../../src/episode.ts";
 import { nodeFileSystemLayer } from "../../src/node-platform.ts";
 import {
@@ -56,10 +57,7 @@ const SESSION_ID = "scenario-session";
 const tool = (name: string): Tool => ({
   name,
   description: `Stub ${name} tool`,
-  // A JSON Schema object is what pi's tools carry at runtime.
-  parameters: Schema.toJsonSchemaDocument(
-    Schema.Struct({ path: Schema.String }),
-  ).schema as Tool["parameters"],
+  parameters: Type.Object({ path: Type.String() }),
 });
 
 const builtinHaiku = getBuiltinModels("anthropic").find(
@@ -432,6 +430,65 @@ const scenarios: Record<
       yield* expectDone(yield* session.say("again"), "PORT-OK");
     }),
 
+  "launch-flags": (session) =>
+    Effect.gen(function* () {
+      yield* session.say("hello");
+      const argv = yield* launchArgv;
+      const after = (flag: string) => argv[argv.indexOf(flag) + 1];
+      yield* expect(
+        after("--settings") === "/host/guards.json",
+        `expected the host settings file to be passed through, got ${after("--settings")}`,
+      );
+      // Empty arguments must survive the launch: a shell would drop them.
+      yield* expect(
+        after("--tools") === "" && after("--setting-sources") === "",
+        `expected --tools "" and --setting-sources "", got ${JSON.stringify(argv)}`,
+      );
+      for (const forbidden of [
+        "--bare",
+        "--safe-mode",
+        "--resume",
+        "--dangerously-skip-permissions",
+      ])
+        yield* expect(
+          !argv.includes(forbidden),
+          `expected the launch never to use ${forbidden}`,
+        );
+      yield* expect(
+        argv.includes("--no-session-persistence") &&
+          argv.includes("--strict-mcp-config"),
+        "expected session persistence off and a strict MCP config",
+      );
+      const seen = yield* readStubFile("env.json");
+      // The host's own isolation setting is overridden for the child only,
+      // and its account selection is kept.
+      yield* expect(
+        seen.includes('"disableClaudeMds":"1"') &&
+          seen.includes('"secureStorageDir":"/account/selected"'),
+        `expected the child-only overrides and the host's account selection, got ${seen}`,
+      );
+    }),
+
+  live: (session) =>
+    Effect.gen(function* () {
+      const asked = yield* session.say(
+        'Call the read tool once with path "a.txt". After its result, answer with the single word DONE.',
+      );
+      yield* expect(
+        asked.stopReason === "toolUse" &&
+          asked.content.some(
+            (block) => block.type === "toolCall" && block.name === "read",
+          ),
+        `expected a read toolCall from the model, got ${asked.stopReason}: ${asked.errorMessage ?? textOf(asked)}`,
+      );
+      yield* session.answerToolCalls("the file says: hello");
+      yield* expectDone(yield* session.call(), "");
+      yield* expectDone(
+        yield* session.say("Answer with the single word OK."),
+        "",
+      );
+    }),
+
   "env-stripping": (session) =>
     Effect.gen(function* () {
       yield* session.say("hello");
@@ -448,14 +505,19 @@ const scenarios: Record<
     }),
 };
 
+/** The arguments the first CLI process was launched with. */
+const launchArgv = Effect.gen(function* () {
+  const first = (yield* readStubFile("argv.jsonl")).trim().split("\n")[0];
+  return yield* Schema.decodeUnknownEffect(
+    Schema.fromJsonString(Schema.Array(Schema.String)),
+  )(first);
+});
+
 /** The private runtime directory, read from the path the CLI was launched with. */
 const stagedPromptDirectory = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const argv = Schema.decodeUnknownSync(
-    Schema.fromJsonString(Schema.Array(Schema.String)),
-  )((yield* readStubFile("argv.jsonl")).trim().split("\n")[0]);
-  const promptFile = argv[argv.indexOf("--system-prompt-file") + 1] ?? "";
-  return path.dirname(promptFile);
+  const argv = yield* launchArgv;
+  return path.dirname(argv[argv.indexOf("--system-prompt-file") + 1] ?? "");
 });
 
 /** `session_shutdown`: disposing ends the parked process and removes the directory. */

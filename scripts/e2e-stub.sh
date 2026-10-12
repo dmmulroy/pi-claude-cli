@@ -18,6 +18,10 @@ trap 'rm -rf "$STUB_DIR" "$WORK_DIR"' EXIT
 cp "$EXT_DIR/tests/e2e/claude-stub.cjs" "$STUB_DIR/claude"
 chmod +x "$STUB_DIR/claude"
 
+# The provider traces by default; keep this run's records out of the user's
+# own trace directory.
+export XDG_STATE_HOME="$WORK_DIR/state"
+
 echo "pi version: $(pi --version 2>/dev/null || true)"
 
 # macOS has neither `timeout` nor `gtimeout` unless coreutils is installed, so

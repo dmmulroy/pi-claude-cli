@@ -8,8 +8,15 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],
-      include: ["src/**/*.ts", "index.ts"],
-      exclude: ["src/mcp-schema-server.cjs"],
+      // The modules unit tests cover: the ones that stay pure. The Effect
+      // services are gated by `npm run test:scenarios` instead.
+      include: [
+        "src/event-bridge.ts",
+        "src/overflow.ts",
+        "src/pi-context.ts",
+        "src/thinking-config.ts",
+        "src/tool-mapping.ts",
+      ],
       thresholds: {
         lines: 92,
         functions: 92,

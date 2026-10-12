@@ -44,7 +44,7 @@ class ScenariosFailed extends Data.TaggedError("ScenariosFailed")<{
 
 /** What a scenario runs: the driver, real pi in print mode, or a script. */
 type ScenarioCommand =
-  | { readonly _tag: "Driver" }
+  | { readonly _tag: "Driver"; readonly scenario: Option.Option<string> }
   | { readonly _tag: "Pi"; readonly prompt: string }
   | { readonly _tag: "Script"; readonly path: string };
 
@@ -74,7 +74,7 @@ const scenario = (
   about,
   asserts: [...asserts, ["--no-open"]],
   env: options.env ?? {},
-  command: options.command ?? { _tag: "Driver" },
+  command: options.command ?? { _tag: "Driver", scenario: Option.none() },
   live: options.live ?? false,
 });
 
@@ -407,6 +407,64 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     },
   ),
   scenario(
+    "launch-flags",
+    "the launch keeps host guards and account selection and never uses --bare",
+    [[...span("ClaudeCli.spawn", "flags~--settings"), ...count(1)]],
+    {
+      env: {
+        PI_CLAUDE_CLI_SETTINGS: "/host/guards.json",
+        CLAUDE_SECURESTORAGE_CONFIG_DIR: "/account/selected",
+        CLAUDE_CODE_DISABLE_CLAUDE_MDS: "0",
+      },
+    },
+  ),
+  scenario(
+    "wire-counts",
+    "by default the wire is recorded as counts and time to first token only",
+    [
+      [
+        ...episode("wire.stream_event=6", "wire.result=1", "ttftMs"),
+        ...count(1),
+      ],
+      ["--event", "wire *", "--max-count", "0"],
+    ],
+    { command: { _tag: "Driver", scenario: Option.some("fresh-spawn") } },
+  ),
+  scenario(
+    "wire-events",
+    "PI_CLAUDE_CLI_TRACE_WIRE=1 adds one event per wire message, without content",
+    [
+      [
+        ...episode(),
+        "--event",
+        "wire stream_event",
+        "--event",
+        "wire result",
+        ...count(1),
+      ],
+      ["--event", "wire raw", "--max-count", "0"],
+    ],
+    {
+      env: { PI_CLAUDE_CLI_TRACE_WIRE: "1" },
+      command: { _tag: "Driver", scenario: Option.some("fresh-spawn") },
+    },
+  ),
+  scenario(
+    "wire-raw",
+    "PI_CLAUDE_CLI_TRACE_WIRE=raw records the raw lines on the process span",
+    [[...span("ClaudeProcess"), "--event", "wire raw", ...count(1)]],
+    {
+      env: { PI_CLAUDE_CLI_TRACE_WIRE: "raw" },
+      command: { _tag: "Driver", scenario: Option.some("fresh-spawn") },
+    },
+  ),
+  scenario(
+    "trace-default-location",
+    "with no PI_CLAUDE_CLI_TRACE the sink writes a private daily file and prunes old ones",
+    [],
+    { command: { _tag: "Script", path: "scripts/scenarios/trace-default.ts" } },
+  ),
+  scenario(
     "print-mode-exit",
     "real pi in print mode loads the provider lazily and exits with a process parked",
     [
@@ -431,10 +489,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       [...span("toolCall", "outcome=ok"), ...count(1)],
       [...span("ClaudeCli.spawn"), ...count(1)],
     ],
-    {
-      live: true,
-      command: { _tag: "Script", path: "scripts/scenarios/live.ts" },
-    },
+    { live: true },
   ),
 ];
 
@@ -472,7 +527,7 @@ const runScenario = Effect.fn("Scenarios.run")(function* (
         return [
           process.execPath,
           path.join(setup.repoRoot, "scripts", "scenarios", "driver.ts"),
-          scenario.name,
+          Option.getOrElse(scenario.command.scenario, () => scenario.name),
         ];
       case "Script":
         return [

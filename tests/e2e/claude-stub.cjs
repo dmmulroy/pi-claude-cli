@@ -22,7 +22,8 @@
  *
  * Environment:
  *   CLAUDE_STUB_ARGV_FILE   append this process's argv as a JSON line
- *   CLAUDE_STUB_ENV_FILE    write the ANTHROPIC_* variables this process sees
+ *   CLAUDE_STUB_ENV_FILE    write what this process sees of the environment
+ *                           the provider controls
  *   CLAUDE_STUB_TOOLS_FILE  append the tool names the MCP server listed
  *   CLAUDE_STUB_REFUSE_CONTROL=1  refuse thinking control requests
  */
@@ -56,6 +57,8 @@ if (process.env.CLAUDE_STUB_ENV_FILE) {
       ),
       mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null,
       disableAutoCompact: process.env.DISABLE_AUTO_COMPACT ?? null,
+      disableClaudeMds: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS ?? null,
+      secureStorageDir: process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? null,
     }),
   );
 }

@@ -62,3 +62,5 @@ jobs:
       - run: npm ci
       - run: npm install -g "@earendil-works/pi-coding-agent@${{ matrix.pi-version }}"
       - run: npm run test:e2e
+      # The gate for the Effect services: every stub scenario's trace assertions.
+      - run: npm run test:scenarios

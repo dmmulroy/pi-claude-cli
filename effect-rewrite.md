@@ -1,4 +1,4 @@
-Plan for rewriting the provider on Effect 4. Nothing is implemented yet.
+Design of the provider on Effect 4, and the record of how the plan met reality. The rewrite is implemented on the `effect-rewrite` branch; "What changed from the plan" at the end lists every place the original plan was wrong or was overruled.
 
 Checked against the `effect@4.0.3` and `@effect/platform-node-shared@4.0.3` source, pi 0.87.1, and Claude Code 2.1.292. Claims marked **(tested)** were run in a scratch project; everything else was read from source.
 
@@ -23,32 +23,34 @@ Every service operation is an `Effect.fn("Service.operation")`, so it is a span 
 | `episode` (root, one per pi call)                                                          | pi session, CLI session, model, `mode` (`spawn`, `turn`, `handoff`), `spawnReason` (which reuse check failed), `outcome` (`done`, `toolUse`, `error`, `aborted`), billed usage |
 | `ClaudeCli.spawn`                                                                          | argv flags, pid, CLI version                                                                                                                                                   |
 | `ClaudeProcess` (root, one per process lifetime; linked from each episode that borrows it) | CLI session, pid, exit code                                                                                                                                                    |
-| `ClaudeProcess.retire`                                                                     | `cause` (`idle`, `signature`, `history`, `failure`, `abort`, `shutdown`), `ended` (`exited`, `killed`)                                                                         |
+| `ClaudeProcess.retire`                                                                     | `cause` (`idle`, `signature`, `history`, `thinking`, `failure`, `timeout`, `abort`, `interrupted`, `unparked`, `replaced`, `exited`, `shutdown`), `ended` (`exited`, `killed`) |
 | `ClaudeProcessPool.take` / `park`                                                          | hit or miss, idle duration                                                                                                                                                     |
 | `ClaudeProcess.applyThinking`                                                              | from, to, acknowledged                                                                                                                                                         |
 | `toolCall` (one per handed-off tool call)                                                  | tool-use id, tool name, outcome                                                                                                                                                |
-| `ProviderRuntime.build` / `dispose`                                                        | which services came up, broker address or none                                                                                                                                 |
+| `ProviderRuntime.build` / `dispose`                                                        | runtime directory ready or not, tool bridge, handoff proxy, wire detail                                                                                                        |
 
 Rules:
 
 - **No span or event per streamed token.** By default `episode` carries a count of wire messages by type and the time to first token as attributes, so an always-on trace stays small.
-- **Wire detail is opt-in.** `PI_CLAUDE_CLI_TRACE_WIRE=1` adds one event per NDJSON line with its type; `PI_CLAUDE_CLI_TRACE_WIRE=raw` includes the line itself, for protocol debugging.
-- **No content by default.** Never prompt text, tool arguments, tool results or the broker secret. Record ids, names, sizes, counts and durations. Only `WIRE=raw` breaks this, and only when asked.
+- **Wire detail is opt-in.** `PI_CLAUDE_CLI_TRACE_WIRE=1` adds one `wire <type>` event per message to `episode`; `PI_CLAUDE_CLI_TRACE_WIRE=raw` also records each raw stdout line as a `wire raw` event on `ClaudeProcess`, for protocol debugging. Raw lines go on the process span because the reader is the only place that still has them undecoded.
+- **No content by default.** Never prompt text, tool arguments or tool results. Record ids, names, sizes, counts and durations. Only `WIRE=raw` breaks this, and only when asked.
 - **Logs are span events.** `Logger.layer([Logger.tracerLogger])` is the only logger; see "Logging".
 
 ### Sink
 
-A custom tracer wraps `Tracer.nativeTracer.span` and appends one NDJSON record when a span starts and one when it ends. The wrapper shape was run against 4.0.3 **(tested)**: parent ids, attributes, log events and the three statuses all come through.
+A custom tracer returns a subclass of `Tracer.NativeSpan` that appends one NDJSON record when a span starts, one for each span event, and one when it ends. Events are their own records, not a field of the end record, so `trace tail` shows them live and a span that never ends still shows what it logged.
 
 ```ts
-{ kind: "start" | "end", name, traceId, spanId, parentSpanId, pid, timeMs,
-  durMs, status: "ok" | "error" | "interrupted", error, attributes, events, links }
+{ kind: "start", name, traceId, spanId, parentSpanId, pid, timeMs, links }
+{ kind: "event", name, traceId, spanId, pid, timeMs, attributes }
+{ kind: "end",   name, traceId, spanId, parentSpanId, pid, timeMs, durMs,
+  status: "ok" | "error" | "interrupted", error, attributes, links }
 ```
 
 - **On by default.** With `PI_CLAUDE_CLI_TRACE` unset, records go to `<state>/traces/<YYYY-MM-DD>.ndjson`, where `<state>` is `$XDG_STATE_HOME/pi-claude-cli` or `~/.local/state/pi-claude-cli`. Any session can then be inspected after the fact, without having been started in a special way.
 - **`PI_CLAUDE_CLI_TRACE=<path>`** writes to that file instead; `trace run` uses this to isolate a scenario. **`PI_CLAUDE_CLI_TRACE=off`** writes nothing.
 - **Append-only**, so several pi processes share a file; every record carries the pid.
-- **Private and bounded.** The directory is `0700` and files `0600`. Files older than seven days are pruned when a runtime builds.
+- **Private and bounded.** The directory is `0700` and files `0600`. Files not written for seven days are pruned when a runtime builds. `trace run` keeps its per-run files in `<state>/traces/runs/`, pruned the same way.
 - **Never in the way.** A failed write disables the sink for that runtime and is otherwise ignored; tracing must not be able to fail an episode.
 - **Not a transcript.** Records hold no conversation content, so invariant 5 stands; the docs step states this in `AGENTS.md`.
 - **Start records matter.** A span that starts and never ends is a leak (a process never retired, a scope never closed), and the CLI can only show it if the start was written.
@@ -58,96 +60,106 @@ A custom tracer wraps `Tracer.nativeTracer.span` and appends one NDJSON record w
 
 ### Trace CLI
 
-`scripts/trace.mjs`: plain Node, no dependencies and no Effect import, so it still works when the rewrite is broken. With no `--file` it reads the default trace location, so `trace tree --last` works straight after any session.
+`scripts/trace.ts` is an Effect program (`effect/cli` commands over `FileSystem`, `Path` and `ChildProcessSpawner`), run directly by Node's type stripping: `node scripts/trace.ts <command>` or `npm run trace -- <command>`. The original plan asked for plain Node with no Effect import so the tool would survive a broken rewrite; the owner overruled that in favour of Effect everywhere. The CLI imports only `src/trace-location.ts`, `src/node-platform.ts` and `src/cross-spawn-spawner.ts`, so a broken provider still leaves it working.
 
-| Command                    | Does                                                                                                                            |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `run -- <command>`         | Create a fresh trace file, set `PI_CLAUDE_CLI_TRACE`, run the command, print the tree, exit with the command's status           |
-| `tree [traceId \| --last]` | Indented span tree with duration, status, attributes and inline events; open spans flagged                                      |
-| `ls`                       | One line per trace: root span, start, duration, status                                                                          |
-| `spans`                    | Filter by `--name`, `--status`, `--attr k=v`; `--json` for piping                                                               |
-| `open`                     | Spans that started and never ended                                                                                              |
-| `tail`                     | Follow the file live                                                                                                            |
-| `stats`                    | Count and p50 / max duration by span name                                                                                       |
-| `assert`                   | Exit non-zero unless the trace matches: `--name`, `--count`, `--status`, `--attr k=v`, `--max-ms`, `--no-open`, `--order a,b,c` |
+With no `--file` a command reads `PI_CLAUDE_CLI_TRACE` when it names a file, otherwise the newest daily file in the default location, so `trace tree --last` works straight after any session. `--run` reads the file of the most recent `trace run`.
 
-`assert` is what replaces test assertions. Build the CLI against a ten-line Effect sample program using the same sink, so it is usable before the first service exists.
+| Command                    | Does                                                                                                                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `run -- <command>`         | Create a fresh trace file, set `PI_CLAUDE_CLI_TRACE`, run the command, print the tree, exit with the command's status                                                                      |
+| `tree [traceId \| --last]` | Indented span tree with duration, status, attributes and inline events; open spans flagged                                                                                                 |
+| `ls`                       | One line per trace: root span, start, duration, status                                                                                                                                     |
+| `spans`                    | Filter by `--name`, `--status`, `--attr`, `--event`, `--under`, `--trace`; `--json` for piping                                                                                             |
+| `open`                     | Spans that started and never ended; exits 1 when there are any                                                                                                                             |
+| `tail`                     | Follow the file live                                                                                                                                                                       |
+| `stats`                    | Count and p50 / max duration by span name                                                                                                                                                  |
+| `assert`                   | Exit non-zero unless the trace matches: the `spans` filters plus `--count`, `--min-count`, `--max-count`, `--max-ms`, `--min-ms`, `--same k`, `--distinct k`, `--no-open`, `--order a,b,c` |
+
+`--attr` takes `k=v`, `k!=v`, `k~regex`, bare `k` (present) and `!k` (absent). An `--order` selector is `name[k=v,...]`, optionally suffixed `:end` to order by end time. `assert` is what replaces test assertions.
 
 ### Verification by scenario
 
-A scenario runs real code: real `pi` with the stub CLI (`tests/e2e/claude-stub.cjs`, extended as needed) where pi can drive it, and a small driver that calls the provider's `streamSimple` directly for multi-call sequences print mode cannot express. Each scenario is `trace run` followed by `trace assert`, kept as a script under `scripts/scenarios/` so it can be re-run.
+A scenario runs real code against the stub CLI (`tests/e2e/claude-stub.cjs`), under `trace run`, and then checks the recorded trace with `trace assert`. `scripts/scenarios.ts` holds every scenario as data (what to run, with which environment, and its assertions) and is the runner:
 
-| Scenario                                                   | The trace must show                                                                                                        |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Fresh spawn                                                | `episode` with `mode=spawn`, `outcome=done`; one `ClaudeCli.spawn`; one `park`                                             |
-| Warm turn                                                  | Second `episode` with `mode=turn`; no `ClaudeCli.spawn`; same pid                                                          |
-| Tool handoff                                               | `outcome=toolUse`; `park` at the handoff idle time; next `episode` with `mode=handoff`, same pid; `toolCall` ok            |
-| Changed history, prompt, tools, or a foreign-provider turn | `mode=spawn` with the matching `spawnReason`; the old process retired with the matching `cause`                            |
-| Thinking change                                            | `applyThinking` acknowledged and no spawn; a refusal leads to a spawn                                                      |
-| Abort mid-stream                                           | `episode` interrupted; `outcome=aborted` within milliseconds; `retire` with `cause=abort` ending afterwards; no open spans |
-| Inactivity timeout                                         | `outcome=error`; process killed                                                                                            |
-| Process dies mid-turn                                      | `outcome=error` carrying the stderr tail; nothing parked                                                                   |
-| Idle expiry                                                | `retire` with `cause=idle` at the keepalive (set short through env)                                                        |
-| `session_shutdown`                                         | `ProviderRuntime.dispose`; no open spans; runtime directory gone; print mode exits                                         |
-| Layer build failure                                        | An `error` terminal event; no hang                                                                                         |
-| Env stripping                                              | The stub reports no `ANTHROPIC_*` variables                                                                                |
-| Live, spends tokens                                        | One turn, one tool call, one warm follow-up                                                                                |
+```bash
+npm run test:scenarios                 # every stub scenario; non-zero if any assertion fails
+node scripts/scenarios.ts warm-turn    # one scenario
+node scripts/scenarios.ts --keep abort-mid-stream   # keep the trace file and print its path
+node scripts/scenarios.ts --list
+node scripts/scenarios.ts --live       # also the live scenario; spends subscription tokens
+```
+
+Most scenarios run `scripts/scenarios/driver.ts`, which calls the provider runtime's `startEpisode` the way pi does and keeps a pi-style conversation, for sequences print mode cannot express. `print-mode-exit` runs real `pi -p`. The driver also checks what a trace cannot show: the terminal event pi received, the stub's view of its argv and environment, and files on disk.
+
+| Scenario                                                                 | The trace must show                                                                                                            |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `fresh-spawn`                                                            | `episode` with `mode=spawn`, `outcome=done`; one `ClaudeCli.spawn`; one `park`                                                 |
+| `warm-turn`                                                              | Second `episode` with `mode=turn`; one `ClaudeCli.spawn` in total; same pid                                                    |
+| `tool-handoff`                                                           | `outcome=toolUse`; `park` at the handoff idle time; next `episode` with `mode=handoff`, same pid; `toolCall` ok                |
+| `tool-abandoned`                                                         | A user message instead of the tool result: `spawnReason=handoffMismatch`; `toolCall` interrupted; the blocked process retired  |
+| `handoff-proxy-off`                                                      | `PI_CLAUDE_CLI_HANDOFF_PROXY=0`: no `toolCall`; `retire` with `cause=interrupted`; the tool result is reimported               |
+| `changed-history`, `changed-prompt`, `changed-tools`, `foreign-provider` | `mode=spawn` with the matching `spawnReason`; the old process retired with `cause=history` or `cause=signature`; distinct pids |
+| `thinking-change`, `thinking-refused`                                    | `applyThinking` acknowledged and no spawn; a refusal leads to `spawnReason=thinking`                                           |
+| `abort-mid-stream`, `abort-during-launch`, `already-aborted`             | `episode` interrupted with `outcome=aborted`; `retire` with `cause=abort` ending afterwards; nothing parked; no open spans     |
+| `inactivity-timeout`                                                     | `outcome=error`; `retire` with `cause=timeout`, `ended=killed`                                                                 |
+| `process-dies`, `turn-fails`                                             | `outcome=error` (the driver checks the stderr tail and exit code in the message); nothing parked                               |
+| `idle-expiry`                                                            | `retire` with `cause=idle` at the keepalive (set short through env)                                                            |
+| `no-session`, `lifecycle-retire`                                         | No pi session: served and ended, not parked. A lifecycle event: `retire` with `cause=shutdown`                                 |
+| `session-shutdown`                                                       | `ProviderRuntime.dispose`; no open spans; the driver checks the runtime directory is gone                                      |
+| `layer-build-failure`                                                    | No `episode` span at all; the driver checks both calls end with an `error` event instead of hanging                            |
+| `env-stripping`, `launch-flags`                                          | The stub reports no `ANTHROPIC_*` variables; host `--settings` kept, empty arguments preserved, never `--bare`                 |
+| `wire-counts`, `wire-events`, `wire-raw`                                 | Counts and `ttftMs` by default and no events; `wire <type>` events at `=1`; `wire raw` events on the process at `=raw`         |
+| `trace-sink`, `trace-default-location`                                   | The three statuses and events; the default daily file is `0600` in a `0700` directory, pruned, and found by the CLI            |
+| `print-mode-exit`                                                        | Real `pi -p` loads the provider lazily, parks a process, disposes on `session_shutdown` and exits                              |
+| `live` (spends tokens)                                                   | One turn, one tool call held open, one warm follow-up, all on one pid                                                          |
+
+Every scenario also asserts `--no-open`.
 
 What this means for the test suite:
 
-- **Keep** the existing unit tests for modules that stay pure: `pi-context`, `thinking-config`, `overflow`, `tool-mapping`, and the `event-bridge` reducer.
+- **Keep** the existing unit tests for modules that stay pure: `pi-context`, `thinking-config`, `overflow`, `tool-mapping` and `event-bridge`.
 - **Delete** the tests of deleted modules. Do not port them, and do not write new unit or integration tests for the Effect services; scenarios cover them.
 - **No `@effect/vitest` and no vitest upgrade.** Scenarios use short timeouts set through env instead of `TestClock`.
-- **Coverage covers what unit tests cover.** Narrow coverage `include` in `vitest.config.ts` to the pure modules and keep the 92% / 85% floors on them. A gate that can never pass gets ignored; this one stays meaningful.
-- **Scenarios are the gate for the services.** `npm run test:scenarios` runs every stub scenario and fails if any `trace assert` fails. It joins the command list in `AGENTS.md`.
+- **Coverage covers what unit tests cover.** Coverage `include` in `vitest.config.ts` lists the five pure modules and keeps the 92% / 85% floors on them. `pi-context` and `tool-mapping` were previously covered only through tests of deleted modules, so they gained direct unit tests.
+- **Scenarios are the gate for the services.** `npm run test:scenarios` runs every stub scenario and fails if any `trace assert` fails. CI runs it in the job that already installs pi.
 
 ## Decide the tool bridge first
 
-Today a tool call leaves the CLI through `mcp-schema-server.cjs`, a unix socket, a shared secret and a handoff broker. Claude Code can instead host an MCP server in-band over the stdio control channel (`"type": "sdk"`, the Agent SDK's mechanism).
+Before the rewrite a tool call left the CLI through `mcp-schema-server.cjs`, a unix socket, a shared secret and a handoff broker. Claude Code can instead host an MCP server in-band over the stdio control channel (`"type": "sdk"`, the Agent SDK's mechanism). The spike settled it: **the in-band route is taken and the socket bridge is gone.**
 
-**Tested, with no model call:** 2.1.292, launched with this project's flags and `--mcp-config '{"mcpServers":{"custom-tools":{"type":"sdk","name":"custom-tools"}}}'`, sent `initialize`, `notifications/initialized` and `tools/list` as `control_request {subtype: "mcp_message"}` on stdout. `mcp_status` then reported the server connected with the probe tool. Probe: `/tmp/effect-audit/scratch/sdk-probe.mjs`.
+Spike results, on 2.1.292 and repeated on the 2.1.263 floor:
 
-**Not tested** (the spike; needs one live turn):
+1. **A `tools/call` round trip held open works.** The call arrives as `control_request {subtype: "mcp_message"}`; the answer is a `control_response` carrying `mcp_response`. Held for 3 s while "pi ran the tool", then the turn continued in-process.
+2. **The call carries the tool-use id** in `_meta["claudecode/toolUseId"]`, on both versions.
+3. **An interrupt mid-call** makes the CLI send `notifications/cancelled {requestId, reason: "AbortError: remote-cancel"}` and end the turn with `error_during_execution`. A late answer to the cancelled call is ignored.
+4. **The call has a timeout and `MCP_TOOL_TIMEOUT` governs it.** At `2000` the CLI told the model the tool timed out after 2 s and sent `notifications/cancelled {reason: "SdkError: Request timed out"}`. The provider keeps setting it to one hour.
+5. **The floor behaves the same.** 2.1.263 lists the tools at start and completes the round trip.
+6. **The `initialize` control request is not required.** Without it the CLI still sends MCP `initialize`, `notifications/initialized` and `tools/list` within half a second of launch.
+7. **`mcp_set_servers` with the same server is a no-op** (`{added: [], removed: []}`), but an MCP `notifications/tools/list_changed` sent as an `mcp_message` makes the CLI ask for `tools/list` again, and `mcp_status` then reports the new tool. Whether the model sees the new surface on its next turn was not tested, so a changed tool surface still retires the process.
 
-1. A `tools/call` round trip, held open while pi runs the tool.
-2. Whether the call carries the tool-use id (`_meta["claudecode/toolUseId"]`).
-3. What the CLI sends when the turn is interrupted mid-call.
-4. Whether the call has a timeout, and whether `MCP_TOOL_TIMEOUT` governs it.
-5. The same on the 2.1.263 floor.
-6. Whether the `initialize` control request the probe sent is required.
-7. `mcp_set_servers` (present in the binary): can it change the tool surface on a live process?
+One thing the spike showed that the plan had not anticipated: the `tools/call` and the `message_stop` of the assistant message that asked for it arrive in either order. See "State that becomes Effect primitives".
 
-If the spike passes, a tool call is one more control request the stdout reader already handles, answered by completing a `Deferred`. The rest of this plan marks what that removes as **bridge only**:
-
-- `mcp-schema-server.cjs` and the `node` child per CLI process
-- `HandoffBroker`, the socket, the shared secret and its file
-- `ToolSchemaStore` and the per-process `--mcp-config` file
-- `SocketServer`, `NodeSocketServer`, `RcMap`, `Redacted`, `timingSafeEqual`
-
-`RuntimeDirectory` would then hold only the system prompt file.
+What the in-band route removed: `mcp-schema-server.cjs` and its `node` child per CLI process, `HandoffBroker`, the socket, the shared secret and its file, the content-addressed schema files and the per-process `--mcp-config` file. `--mcp-config` is now a constant JSON string. `RuntimeDirectory` holds only system prompt files.
 
 ## Lifetimes as scopes
 
 ```text
 runtime scope                      one ManagedRuntime per extension instance
-├── TraceSink                      tracer + tracerLogger; writes unless PI_CLAUDE_CLI_TRACE=off
+├── tracing                        tracer + tracerLogger; file sink unless PI_CLAUDE_CLI_TRACE=off
 ├── RuntimeDirectory               0700 temp dir, removed on close
-├── HandoffBroker                  bridge only: socket + secret file
-├── ToolSchemaStore                bridge only: content-addressed schema files
 └── ClaudeProcessPool
     └── process scope              Scope.fork(runtime), closed by retire
-        ├── mcp-config file        bridge only
+        ├── ClaudeProcess span     root span for the process lifetime
         ├── child process          finalizer: see "Retiring a process"
-        ├── stdout reader fiber    answers control requests, fills inbox
+        ├── stdout reader fiber    answers control and MCP requests, fills inbox
         ├── stdin writer fiber     drains one outbound Queue
-        ├── stderr tail            last 64 KiB
-        ├── idle timer             FiberHandle; re-parking replaces it
-        └── broker registration    bridge only
+        ├── stderr reader fiber    keeps the last 64 KiB
+        ├── tool-call fibers       one per open `tools/call`, waiting on pi's result
+        └── idle timer             FiberHandle; re-parking replaces it
 
 episode scope                      one pi call, Effect.scoped
-├── system prompt file             makeTempFileScoped
-├── inactivity timeout
-└── borrows one process scope; on exit: park it or close it
+├── system prompt file             acquireRelease in the runtime directory
+└── borrows one process scope; on exit: park it or retire it
 ```
 
 The process scope is deliberately not a child of the episode scope; that is the one place needing explicit `Scope.fork` / `Scope.close` instead of `Effect.scoped`.
@@ -160,25 +172,27 @@ pi calls the extension factory once per session (`/new`, `/resume`, `/fork`, `/r
 - Dispose it on `session_shutdown`. A disposed runtime cannot be reused **(tested)**, so the handler clears the reference and the next call builds a fresh one.
 - `session_start`, `model_select`, `session_tree` and `session_compact` call `pool.retireAll` only.
 
-This is required, not tidy-up. pi's print mode exits by letting the event loop drain (`main.js` sets `process.exitCode` and returns). Effect timers are not `unref`'d, and `NodeSocketServer` hides its `net.Server`, so neither can be `unref`'d the way today's are. Disposing on `session_shutdown` is what lets print mode exit. `beforeExit` is not a usable hook: it only fires once the loop is already empty.
+This is required, not tidy-up. pi's print mode exits by letting the event loop drain (`main.js` sets `process.exitCode` and returns). Effect timers are not `unref`'d, and a parked process keeps its pipes open. Disposing on `session_shutdown` is what lets print mode exit; the `print-mode-exit` scenario checks it with a process parked at the default keepalive. `beforeExit` is not a usable hook: it only fires once the loop is already empty.
 
-Keep every layer infallible. A failed layer build is memoized: it is attempted once and every later call fails the same way **(tested)**. A broker that cannot bind yields `Option.none`, not a failure.
+Keep every layer infallible. A failed layer build is memoized: it is attempted once and every later call fails the same way **(tested)**. A runtime directory that cannot be created is therefore recorded in the service and reported by each episode that needs it, and a trace directory that cannot be created turns the file sink off.
 
 ## The pi boundary and abort
 
-pi needs the stream returned synchronously. `index.ts` stays free of Effect imports and loads the runtime on the first model call, because a top-level `import "effect"` costs about 135 ms and 60 MB RSS on every pi start **(tested)**, used or not.
+pi needs the stream returned synchronously. `index.ts` stays free of Effect imports and loads the runtime on the first model call, because a top-level `import "effect"` costs about 135 ms and 60 MB RSS on every pi start **(tested)**, used or not. The dynamic import works under pi's bundled jiti (the `print-mode-exit` scenario and `npm run test:e2e` both go through it).
 
 ```ts
 // index.ts, inside the factory
 let loaded: Promise<ProviderRuntime> | undefined;
 const provider = () =>
-  (loaded ??= import("./src/provider-runtime.js").then((m) => m.make()));
+  (loaded ??= import("./src/provider-runtime.ts").then((m) =>
+    m.startProviderRuntime(),
+  ));
 
 const streamSimple = (model, context, options) => {
   const piStream = createAssistantMessageEventStream();
   provider().then(
-    (p) => p.startEpisode(piStream, model, context, options),
-    (err) => failStream(piStream, model, err),
+    (runtime) => runtime.startEpisode(piStream, model, context, options),
+    (cause) => failStream(piStream, model, cause),
   );
   return piStream;
 };
@@ -186,69 +200,77 @@ const streamSimple = (model, context, options) => {
 pi.on("session_shutdown", async () => {
   const current = loaded;
   loaded = undefined;
-  await (await current)?.dispose();
+  await (await current?.catch(() => undefined))?.dispose();
 });
 ```
 
 ```ts
 // src/provider-runtime.ts
 startEpisode: (piStream, model, context, options) => {
-  const partial = MutableRef.make(emptyAssistantMessage(model));
-  runtime.runCallback(runEpisode(model, context, options, piStream, partial), {
+  const bridge = createEventBridge(piStream, model);
+  runtime.runCallback(runEpisode({ model, context, options, bridge }), {
     signal: options?.signal, // abort = fiber interruption
-    onExit: (exit) => pushTerminalEvent(piStream, partial, exit),
+    onExit: (exit) => pushTerminalEvent(piStream, bridge, exit),
   });
 };
 ```
 
 The terminal event is pushed from `runCallback`'s `onExit`, not from an `Effect.onExit` inside `runEpisode`. If the runtime fails to build, `runEpisode` never starts and its own exit handler never runs, leaving pi's stream open forever **(tested)**. The boundary `onExit` also covers defects and an already-aborted signal, which arrives as an interrupt-only cause **(tested)**. It replaces the `streamEnded` guard: one fiber, one exit, one of `done`, `error` or `aborted`.
 
-`partial` is a `MutableRef` owned by the boundary, so the plain `onExit` callback can read what was already streamed.
+The event bridge is created by the boundary and owns the partial message, so the plain `onExit` callback can read what was already streamed. The plan had a `MutableRef` for this; the bridge already is one.
 
-Check the dynamic import under pi's bundled jiti before relying on it; the load cost was measured with jiti 2.7.0 and pi's options, not through pi.
+`ProviderRuntime` (`startEpisode`, `retireParkedProcesses`, `dispose`) has no Effect types in its signature. `startProviderRuntime` takes the provider layer as a parameter, which is how the `layer-build-failure` scenario runs the real boundary over a layer that cannot build.
 
 ## State that becomes Effect primitives
 
-| Today                                                                                               | Effect                                                                                                                                              |
-| --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sink` + `buffer` + `attach`/`detach`                                                               | One `Queue.sliding<CliMessage, ProcessExited>(20_000)` inbox per process; an episode takes from it, so buffering during a handoff gap needs no code |
-| `onClose` / `onError` sink callbacks                                                                | `Queue.fail(inbox, ProcessExited)`; buffered lines drain before the failure surfaces **(tested)**                                                   |
-| `awaiting` / `pending` / `ready` maps                                                               | One `Deferred<HandoffResult>` per tool-use id, created by `expectToolCall`; the call awaits it, pi's result completes it, in either order           |
-| `controlWaiters` + 5 s timer                                                                        | `Deferred<boolean>` per request id, with `Effect.timeout`                                                                                           |
-| Inactivity `setTimeout` reset per line                                                              | `Queue.take(inbox).pipe(Effect.timeoutOrElse(...))`; a timed-out take loses nothing **(tested)**                                                    |
-| `retire()` grace timers (2 s, 500 ms)                                                               | Process-scope finalizer; see "Retiring a process"                                                                                                   |
-| `activeProcesses` + `killAllProcesses`                                                              | Gone; every process scope is a child of the runtime scope                                                                                           |
-| Idle timer per parked process                                                                       | `FiberHandle` inside the process scope; `run` interrupts the previous timer, and retiring the process removes it                                    |
-| `parked` map                                                                                        | `SynchronizedRef<HashMap<PiSessionId, ParkedProcess>>`                                                                                              |
-| `process.env` reads scattered across files                                                          | One `Config` struct, read once; see "Config"                                                                                                        |
-| `any` NDJSON messages                                                                               | `Schema` union decoded at the stdout boundary; see "Decoding stdout"                                                                                |
-| `execSync("claude --version")` on every spawn; `claude auth status` blocking startup (about 220 ms) | `Effect.cached` version check; auth check forked at first use                                                                                       |
-| `addUsage` / `maxUsage`                                                                             | `Struct.makeReducer` with `Number.ReducerSum` / `ReducerMax`                                                                                        |
-| `Date.now()` and `Math.random()` in ids and timestamps                                              | `Clock` and `Crypto`, so tests are deterministic                                                                                                    |
-| `console.warn` / `console.error`                                                                    | `Effect.log*`, recorded as span events; see "Logging"                                                                                               |
+| Today                                                                                               | Effect                                                                                                                                                                       |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sink` + `buffer` + `attach`/`detach`                                                               | One `Queue.sliding<CliMessage, ProcessExited>(20_000)` inbox per process; an episode takes from it, so buffering during a handoff gap needs no code                          |
+| `onClose` / `onError` sink callbacks                                                                | `Queue.fail(inbox, ProcessExited)`; buffered lines drain before the failure surfaces **(tested)**                                                                            |
+| `awaiting` / `pending` / `ready` maps                                                               | One `Deferred<McpToolResult>` per tool-use id, created by the stdout reader when it sees the `tool_use` block; the call awaits it, pi's result completes it, in either order |
+| `controlWaiters` + 5 s timer                                                                        | `Deferred<boolean>` per request id, with `Effect.timeout`                                                                                                                    |
+| Inactivity `setTimeout` reset per line                                                              | `Queue.take(inbox).pipe(Effect.timeoutOrElse(...))`; a timed-out take loses nothing **(tested)**                                                                             |
+| `retire()` grace timers (2 s, 500 ms)                                                               | Process-scope finalizer; see "Retiring a process"                                                                                                                            |
+| `activeProcesses` + `killAllProcesses`                                                              | Gone; every process scope is a child of the runtime scope                                                                                                                    |
+| Idle timer per parked process                                                                       | `FiberHandle` inside the process scope; `run` interrupts the previous timer, and retiring the process removes it                                                             |
+| `parked` map                                                                                        | `Ref<HashMap<piSessionId, ParkedProcess>>`; no update is effectful, so `SynchronizedRef` was not needed                                                                      |
+| `process.env` reads scattered across files                                                          | One `Config` struct, read once; see "Config"                                                                                                                                 |
+| `any` NDJSON messages                                                                               | `Schema` union decoded at the stdout boundary; see "Decoding stdout"                                                                                                         |
+| `execSync("claude --version")` on every spawn; `claude auth status` blocking startup (about 220 ms) | Version asked once per runtime and remembered only once known, so installing the CLI mid-session works; auth check forked at first launch                                    |
+| `addUsage` / `maxUsage`                                                                             | `Struct.makeReducer` with `Number.ReducerSum` / `ReducerMax`                                                                                                                 |
+| `Date.now()` and `Math.random()` in ids and timestamps                                              | `Clock` and `Crypto` in the services; the event bridge keeps `Date.now()` for the message timestamp                                                                          |
+| `console.warn` / `console.error`                                                                    | `Effect.log*`, recorded as span events; see "Logging"                                                                                                                        |
 
 Take from the inbox one message at a time with `Queue.take`. Do not consume it through `Stream.fromQueue`: that pulls with `takeAll`, so an episode that ends mid-batch would drop lines belonging to the next episode.
 
+**The reader, not the episode, registers expected tool calls.** The plan had the episode call `expectToolCall` when it read a `tool_use` block. But the reader and the episode are different fibers: the CLI's `tools/call` can reach the reader before the episode has taken the block out of the inbox, and the call would be refused as unmatched. The reader sees every line in order, so it creates the `Deferred` itself and `expectToolCall` is not part of the interface.
+
 ### Retiring a process
 
-Two finalizers, run in this order:
+`retire(cause)` closes the process scope. The first call does the work under a `ClaudeProcess.retire` span; later calls wait for it. Two finalizers matter, run in this order:
 
-1. Ours, registered after the spawn so it runs first: if a turn is live, write the interrupt and wait up to 2 s for exit; then `Queue.end(outbound)`, which closes the child's stdin **(tested)**, and wait up to 500 ms.
-2. The spawner's own: signal whatever is still running. Spawn with `killSignal: "SIGKILL"` so this matches today's last step.
+1. Ours, registered after the spawn so it runs first. If a turn is live, write the interrupt and wait up to 2 s for the turn to end or the process to exit, whichever is first; then `Queue.end(outbound)`, which closes the child's stdin **(tested)**, and wait up to 500 ms for the exit. The plan waited the full 2 s for an _exit_ after the interrupt, as the old code did; but the CLI answers an interrupt with a `result` and keeps running, so that always cost 2 s. Waiting for the turn to end retires an interrupted process in milliseconds.
+2. The spawner's own: signal whatever is still running. The process is spawned with `killSignal: "SIGKILL"`.
+
+`cause=timeout` skips step 1: a CLI that has gone silent is killed at once, as before.
+
+A process that ends on its own (stdout EOF) fails its inbox with `ProcessExited` and retires itself with `cause=exited`. That retire is forked into the runtime scope, because it closes the scope the reader runs in.
 
 ### Decoding stdout
 
-Use `Stream.decodeText` + `Stream.splitLines`, then a lenient per-line decode: skip lines that do not start with `{`, and treat a failed decode as an ignored envelope. Lines arrive one per write, with no batching **(tested)**.
+Use `Stream.decodeText` + `Stream.splitLines`, then a lenient per-line decode (`decodeCliLine` in `src/cli-protocol.ts`): skip lines that do not start with `{`, read the envelope's `type`, decode the body for the types the provider acts on, and fall back to an `Other` message for anything unknown or malformed, so it still counts as output for the inactivity timeout. Lines arrive one per write, with no batching **(tested)**.
 
 - Do not use `encoding/Ndjson` here. One unparseable line fails the whole channel, and the CLI prints non-JSON debug lines.
-- The wire format is undocumented and changes. The inner `event` union needs its own catch-all, so a new delta type degrades to "ignored" and never fails an episode.
+- The wire format is undocumented and changes. The inner streaming event is one loose struct with optional fields, not a union, so a new event or delta type decodes and is ignored by the event bridge. Token counts accept `null`.
 - Decode synchronously (`Schema.decodeUnknownOption`) on this path; it runs once per streamed token.
 
 ### Config
 
-`Config` fails on an invalid value; today an unparseable `PI_CLAUDE_CLI_TIMEOUT_MS` silently falls back to the default. `Config.withDefault` covers only a missing value. Decide per variable whether to stay lenient (`Config.orElse`) or surface the mistake as an assistant error. `PI_CLAUDE_CLI_KEEPALIVE_MS` also accepts `off`, `false` and `none`, which needs a custom `Config.schema`.
+`ProviderConfig` reads every variable once when the runtime builds, and stays lenient everywhere: an unset, empty or unparseable value falls back to its default, as it always has, so a typo in a tuning variable cannot stop pi from getting a model response and the layer cannot fail. `PI_CLAUDE_CLI_KEEPALIVE_MS` accepts `0`, `off`, `false` and `none` for "park nothing". No `Config.schema` was needed: the values are read as optional strings and parsed by small pure functions.
 
-Scenarios set real env vars. Any unit test that needs config supplies it through `ConfigProvider.fromEnvRecord` instead of mutating `process.env`.
+`PI_CLAUDE_CLI_THINKING_DISPLAY` is still read by `thinking-config.ts` itself, which stays a pure module with its own tests.
+
+Scenarios set real env vars; each runs in its own process.
 
 ### Logging
 
@@ -259,137 +281,142 @@ Every `Effect.log*` call then becomes an event on the current span **(tested)**,
 ## Where RcMap fits, and where it doesn't
 
 - **Not the process pool.** `RcMap` derives a resource from its key alone and shares it. A parked process depends on the request (signature, acknowledged history), is exclusive, and has an idle time that depends on why it was parked (10 minutes after a turn, 30 minutes in a handoff). 4.0.3's per-key `idleTimeToLive` does not change this.
-- **Yes for `ToolSchemaStore`, bridge only.** `RcMap<ToolSurfaceJson, SchemaFile>`, acquired in each process scope. Schema files are then deleted when the last process using them retires, instead of accumulating until exit. The content hash can replace the `version` counter in the launch signature.
+- **Not needed at all on the in-band route.** Its one use was the bridge's schema files. The tool surface is now a JSON string in the launch signature.
 
 ## Services
 
 ```ts
 interface IClaudeProcess {
   // a scoped value, not a contextual service
+  readonly cliSessionId: string;
+  readonly pid: number;
+  readonly signature: LaunchSignature;
+  readonly allowHandoff: boolean;
+  readonly span: Tracer.Span; // linked from each episode that borrows it
   readonly inbox: Queue.Dequeue<CliMessage, ProcessExited>;
-  readonly writeUser: (blocks: UserContent) => Effect.Effect<void, ProcessGone>;
+  readonly acknowledged: Ref.Ref<Option.Option<HistoryCheckpoint>>;
+  readonly lastProcessTotals: Ref.Ref<TokenUsage>;
+  readonly turnReported: Ref.Ref<TokenUsage>;
+  readonly idleTimer: FiberHandle.FiberHandle<void>;
+  readonly isAlive: Effect.Effect<boolean>;
+  readonly isTurnActive: Effect.Effect<boolean>;
+  readonly writeUser: (content) => Effect.Effect<void, ProcessGone>;
   readonly interruptTurn: Effect.Effect<void>;
   readonly applyThinking: (t: CliThinking) => Effect.Effect<boolean>;
-  readonly expectToolCall: (
-    id: ToolUseId,
-    name: PiToolName,
-  ) => Effect.Effect<void>;
-  readonly answerToolCall: (
-    id: ToolUseId,
-    r: HandoffResult,
-  ) => Effect.Effect<void>;
-  readonly acknowledged: Ref.Ref<Option.Option<HistoryCheckpoint>>;
-  readonly retire: Effect.Effect<void>; // closes the process scope
+  readonly awaitsToolCalls: (ids) => Effect.Effect<boolean>;
+  readonly answerToolCall: (id, r: McpToolResult) => Effect.Effect<void>;
+  readonly retire: (cause: RetireCause) => Effect.Effect<void>; // closes the process scope
+  readonly awaitRetired: Effect.Effect<void>;
 }
 
 interface IClaudeProcessPool {
-  readonly take: (
-    id: PiSessionId,
-  ) => Effect.Effect<Option.Option<IClaudeProcess>>;
+  readonly launch: (
+    launch: ClaudeProcessLaunch,
+  ) => Effect.Effect<IClaudeProcess, CliRequirementError | CliSpawnError>;
+  readonly take: (id: string) => Effect.Effect<Option.Option<IClaudeProcess>>;
   readonly park: (
-    id: PiSessionId,
+    id: string,
     p: IClaudeProcess,
     idle: Duration.Duration,
   ) => Effect.Effect<void>;
-  readonly retireAll: Effect.Effect<void>;
-}
-
-interface IHandoffBroker {
-  // bridge only
-  readonly address: Option.Option<SocketPath>; // none = interrupt-and-reimport fallback
-  readonly register: (
-    id: CliSessionId,
-    route: HandoffRoute,
-  ) => Effect.Effect<void, never, Scope.Scope>;
+  readonly retireInBackground: (
+    p: IClaudeProcess,
+    cause: RetireCause,
+  ) => Effect.Effect<void>;
+  readonly retireAll: (cause: RetireCause) => Effect.Effect<void>;
 }
 ```
 
-`ClaudeCli` wraps `ChildProcessSpawner` (launch flags, env stripping, version and auth checks). `ProviderConfig`, `RuntimeDirectory` and, on the bridge route, `ToolSchemaStore` are the remaining services.
+The pool owns `launch` because the pool's scope is the parent of every process scope: `launchClaudeProcess` forks the process scope from it, and a failed launch closes that scope again. `retireInBackground` forks the retire into the same scope, which is where "never await a retire" lives.
 
-### Spawning
-
-- **Env stripping.** `extendEnv: true` with `env: { ANTHROPIC_API_KEY: undefined, ... }` removes the variables from the child **(tested)**. Keep a test that reads the child's real environment; this is invariant 6.
-- **`detached: false`, explicitly.** Effect defaults to `detached: true` off Windows, which puts the child in its own process group **(tested)**. Ctrl-C in `pi -p` would then no longer reach `claude`. With `false`, the spawner's group kill fails and falls back to a plain kill.
-- **Windows.** Effect's spawner calls `child_process.spawn` directly and does not resolve `claude.cmd`. `shell: true` is not a fix: it drops empty arguments, turning `--tools "" --setting-sources ""` into `--tools --setting-sources` **(tested)**. Keep `cross-spawn` behind a custom `ChildProcessSpawner` layer; `ChildProcessSpawner.make` and `makeHandle` are exported for this. The same seam gives tests a fake spawner.
+`ClaudeCli` wraps `ChildProcessSpawner` (launch flags, env stripping, version and auth checks). `ProviderConfig` and `RuntimeDirectory` are the remaining services. Session and tool-use ids are plain strings; the plan's branded id types were not introduced.
 
 ## The episode
 
 ```text
-runEpisode(model, context, options, piStream, partial)
+runEpisode({ model, context, options, bridge })
   request   = normalize pi context
-  parked    = pool.take(sessionId)
-  mode      = decide(parked, request)            # pure: spawn | turn | handoff
-  process   = mode is spawn ? retire parked, ClaudeCli.spawn, write full history
+  parked    = pool.take(sessionId)               # uninterruptible with recording it
+  mode      = decideEpisodeMode(parked, request) # pure: spawn(reason) | turn | handoff
+  mode is turn and applyThinking refused → spawn(thinking)
+  process   = mode is spawn ? retire parked in background, stage prompt file,
+                              pool.launch (uninterruptible), write full history
                             : parked
-  mode is turn    → applyThinking, writeUser(delta)
+  mode is turn    → writeUser(delta)
   mode is handoff → answerToolCall for each tool result
   loop take inbox (with inactivity timeout)
-    stream_event → reduce bridge state into partial, push pi events,
-                   expectToolCall on tool_use
+    stream_event → bridge.handleEvent pushes pi events; note a tool_use block
     message_stop with tool call
       handoff on  → return HandedOff
       handoff off → interruptTurn, keep reading for result
     result       → apply usage, return TurnEnded | fail CliResultError
-  on exit (inside the fiber)
-    HandedOff → park(30 min)      TurnEnded → park(keepalive) or retire
-    failure / interrupt → fork retire into the runtime scope, do not await it
+  release (uninterruptible)
+    HandedOff → set checkpoint, park(handoff wait)
+    TurnEnded → interrupted: retire in background
+                else set checkpoint and park(keepalive), or retire in background
+  on failure / interrupt → retire in background, do not await it
   then the boundary onExit pushes exactly one of done | error | aborted
 ```
 
-Two ordering rules:
+Three ordering rules:
 
 - **Park before the fiber exits.** `done` is pushed after exit, so the process is already parked when pi issues the next call.
-- **Never await a retire on the failure or abort path.** Retiring can take 2.5 s; awaiting it would delay `aborted` by that long. Today's code pushes first and retires in the background, and this keeps that.
+- **Never await a retire on the failure or abort path.** Retiring can take 2.5 s; awaiting it would delay `aborted` by that long. This now also holds when a parked process is replaced on the spawn path, which the old code awaited.
+- **Taking or launching a process and recording it are one uninterruptible step.** The first full scenario run caught this: an abort landing between `pool.launch` returning and the episode recording the process left a process that was neither parked nor retired until the runtime was disposed. `abort-during-launch` covers it.
+
+`decideEpisodeMode` (`src/episode-mode.ts`) is a pure function of the parked process's facts and the request. The launch signature is a struct, not a JSON string, so a spawn names the setting that changed (`signature.prompt`, `signature.tools`, …).
 
 ## File layout
 
 ```text
 index.ts                      # pi registration, lazy import, session_shutdown → dispose
 src/
-├── provider-runtime.ts       # ManagedRuntime, provider layer, startEpisode
-├── tracing.ts                # file tracer, tracerLogger layer
-├── provider-config.ts        # Config
-├── errors.ts                 # tagged errors
-├── cli-protocol.ts           # Schema for the NDJSON wire format
-├── runtime-directory.ts      # service
-├── claude-cli.ts             # service (ChildProcessSpawner)
-├── cross-spawn-spawner.ts    # ChildProcessSpawner layer over cross-spawn
-├── claude-process.ts         # scoped process resource
-├── claude-process-pool.ts    # service
+├── provider-runtime.ts       # ManagedRuntime, provider layer, startEpisode, terminal event
 ├── episode.ts                # runEpisode
-├── event-bridge.ts           # reducer: (state, event) → [state, piEvents]
-├── pi-context.ts, thinking-config.ts, overflow.ts, tool-mapping.ts   # stay pure
-│
-│   bridge only:
-├── tool-schema-store.ts      # service (RcMap)
-├── handoff-broker.ts         # service (socket server)
-└── mcp-schema-server.cjs     # unchanged
+├── episode-mode.ts           # pure: launch signature, spawn | turn | handoff decision
+├── claude-process-pool.ts    # service: launch, take, park, retire
+├── claude-process.ts         # scoped process resource
+├── claude-cli.ts             # service: launch flags, env, version and auth checks
+├── cross-spawn-spawner.ts    # ChildProcessSpawner layer over cross-spawn
+├── runtime-directory.ts      # service: private temp dir, system prompt files
+├── provider-config.ts        # service: environment configuration
+├── mcp-inband.ts             # pure: the in-band MCP server's protocol
+├── cli-protocol.ts           # Schema for the NDJSON wire format, stdin line builders
+├── cli-requirements.ts       # pure: minimum CLI version
+├── usage.ts                  # pure: token arithmetic for billing
+├── errors.ts                 # tagged errors
+├── terminal-event.ts         # plain: done / error events (no Effect import)
+├── tracing.ts                # file tracer, tracerLogger layer
+├── trace-location.ts         # where traces are written; shared with the CLI
+├── node-platform.ts          # Node FileSystem, Path, Crypto layers
+├── event-bridge.ts           # CLI stream events → pi events and the partial message
+└── pi-context.ts, thinking-config.ts, overflow.ts, tool-mapping.ts   # stay pure
+scripts/
+├── trace.ts, trace/          # the trace CLI
+├── scenarios.ts              # scenario definitions and runner
+└── scenarios/                # driver, sample program, trace-location check
 ```
-
-On the in-band route, add `mcp-inband.ts` (answers `initialize`, `tools/list`, `tools/call`, typed with `effect/ai/McpSchema`) in place of the three bridge files.
 
 ## Module inventory
 
-Import paths are for 4.0.3: `effect/process`, `effect/socket`, `effect/encoding`, with no `unstable/` prefix. They are still annotated unstable, as is `Crypto`.
+Import paths are for 4.0.3: `effect/process`, `effect/cli`, with no `unstable/` prefix. They are still annotated unstable, as is `Crypto`. Local TypeScript is imported with `.ts` specifiers and the package is `"type": "module"`, so Node's type stripping runs the scripts and the provider with no loader; jiti (pi) and vitest accept the same specifiers.
 
-- **Core, heavy use:** `Effect`, `Layer`, `Context`, `Scope`, `ManagedRuntime`, `Exit`, `Cause`, `Fiber`, `Deferred`, `Queue`, `Ref`, `SynchronizedRef`, `Stream`, `Schema`, `Config`, `Duration`, `Option`, `Data`.
+- **Core, heavy use:** `Effect`, `Layer`, `Context`, `Scope`, `ManagedRuntime`, `Exit`, `Cause`, `Fiber`, `Deferred`, `Queue`, `Ref`, `Stream`, `Schema`, `Config`, `Duration`, `Option`, `Data`.
 - **Core, one specific job:**
   - `FiberHandle`: idle timer per process
-  - `MutableRef`: the partial message
   - `HashMap`: the parked map
-  - `FileSystem`: `makeTempDirectoryScoped`, `makeTempFileScoped`, `writeFileString` with `mode`
+  - `FileSystem`: `makeTempDirectoryScoped`, `writeFileString` with `mode`
   - `Path`
-  - `Crypto`: UUID, digest
+  - `Crypto`: UUID
   - `Clock`: timestamps
   - `Tracer`: the file sink; see "Tracing and verification"
   - `Logger`: `tracerLogger` only
-  - `ConfigProvider`: tests
   - `Struct` + `Number` reducers: usage arithmetic
-  - `Match`: mode decision
+  - `Result`: a layer that records a failure instead of failing
 - **Process:** `effect/process` `ChildProcess` + `ChildProcessSpawner`.
-- **Bridge only:** `RcMap`, `effect/socket`, `Redacted`, `Crypto` random bytes.
-- **In-band route only:** `effect/ai/McpSchema`.
-- **Node platform:** `@effect/platform-node-shared`, not `@effect/platform-node`. The shared package has every layer needed (spawner, filesystem, path, crypto, socket server) and depends only on `ws`. `@effect/platform-node` adds `undici` and a non-optional `redis` peer, which would land in every pi install. Its `NodeServices.layer` is a plain merge that is easy to write by hand.
+- **Scripts:** `effect/cli` `Command`, `Flag`, `Argument`; `Console`; `Runtime.errorExitCode` for exit codes.
+- **Planned and not used:** `SynchronizedRef`, `MutableRef`, `Match`, `ConfigProvider`, `Config.schema`, `makeTempFileScoped`, and `effect/ai/McpSchema` (the four MCP methods are typed with a few small `Schema` structs in `cli-protocol.ts` instead).
+- **Node platform:** `@effect/platform-node-shared`, not `@effect/platform-node`, and imported by narrow entrypoint (`@effect/platform-node-shared/NodeFileSystem`), never the barrel: the barrel also loads the socket, cluster and `ws` modules, about 80 ms and 25 MB **(tested)**. The shared package has every layer needed (filesystem, path, crypto, stream and sink adapters) and depends only on `ws`. `@effect/platform-node` adds `undici` and a non-optional `redis` peer, which would land in every pi install. Its `NodeServices.layer` is a plain merge that is easy to write by hand.
 - **Testing:** none planned. Verification is by trace; see "Verification by scenario". `TestClock`, `TestCrypto`, `FileSystem.layerNoop` and a fake `ChildProcessSpawner` exist if a case turns out to need them. `@effect/vitest` 4.0.3 requires vitest 5 (the repo is on 3.2.7) and is not adopted.
 - **Considered and rejected:**
   - `Pool`, `RcRef`, `ScopedRef`, `LayerMap`: wrong sharing model for an exclusive, request-dependent process.
@@ -407,20 +434,20 @@ Import paths are for 4.0.3: `effect/process`, `effect/socket`, `effect/encoding`
 
 ## What should stay outside Effect
 
-- **`index.ts`.** Registration, the lazy import and the `session_shutdown` handler; see "The pi boundary and abort".
-- **`mcp-schema-server.cjs`, bridge only.** The CLI starts it with plain `node` once per process. It has no dependencies, and this package has no build step, so an Effect/TypeScript entry point could not be launched that way.
-- **A synchronous `process.on("exit")` fallback.** Effect finalizers cannot run there; keep a small `rmSync` + SIGKILL last resort. Register it once per runtime and remove it on dispose, so `/reload` does not accumulate listeners.
-- **The bridge socket, if kept.** `NodeSocketServer` cannot be `unref`'d or capped at a request size. Either accept that (dispose on `session_shutdown` covers exit) or own a `node:net` server in `Effect.acquireRelease`.
-- **Constant-time secret comparison, bridge only.** `Crypto` has no equivalent, so `node:crypto`'s `timingSafeEqual` stays.
+- **`index.ts`.** Registration, the lazy import and the `session_shutdown` handler; see "The pi boundary and abort". `src/terminal-event.ts` is plain for the same reason: `index.ts` uses it to report a runtime that failed to load.
+- **A synchronous `process.on("exit")` fallback.** Effect finalizers cannot run there, so `RuntimeDirectory` keeps a small `rmSync` and the pool a SIGKILL of its live pids as last resorts. Each is registered once per runtime and removed on dispose, so `/reload` does not accumulate listeners.
+- **The span sink's append.** `appendFileSync` inside the tracer: a span boundary is a synchronous callback.
+- **The event bridge.** It stays the accumulator it was (`handleEvent`, `applyResult`, `getOutput`) and is called from the episode inside `Effect.sync`. The plan called for a `(state, event) → [state, piEvents]` reducer; that would have meant rewriting 600 lines that encode a dozen hard-won wire fixes, and their 1,700 lines of tests, for no change in behaviour.
+- **The stub CLI** (`tests/e2e/claude-stub.cjs`): it stands in for a foreign binary and is plain CommonJS on purpose.
 
 ## Things to verify before committing
 
-1. **The in-band MCP spike.** It decides whether the bridge services are built at all.
-2. **Dynamic import under pi's bundled jiti.**
-3. **Windows launch**, through the `cross-spawn` spawner layer.
-4. **Print mode exits** after a turn with a parked process and, on the bridge route, a live socket.
-5. **Every scenario** in "Verification by scenario" passes its `trace assert` (`npm run test:scenarios`).
-6. **Coverage** passes on the narrowed `include`. 6,784 lines of tests are built on mock `ChildProcess` objects and fake timers; most go away with the modules they test.
+1. **The in-band MCP spike.** Done; in-band route taken. See "Decide the tool bridge first".
+2. **Dynamic import under pi's bundled jiti.** Works: `npm run test:e2e` and the `print-mode-exit` scenario load `src/provider-runtime.ts` through it.
+3. **Windows launch**, through the `cross-spawn` spawner layer. **Not verified.** The spawner is exercised on macOS only; CI's Windows job runs the unit tests, which no longer touch it.
+4. **Print mode exits** after a turn with a parked process. Verified with the stub (`print-mode-exit`) and once live through real `pi -p` with a real tool call.
+5. **Every scenario** passes its `trace assert`: `npm run test:scenarios`.
+6. **The coverage floors.** Settled: coverage is narrowed to the pure modules and the floors hold there.
 
 Already settled: streaming latency (lines arrive per write) and load cost (about 135 ms, deferred by the lazy import).
 
@@ -434,3 +461,24 @@ Already settled: streaming latency (lines arrive per write) and load cost (about
 5. Pool and `runEpisode`; `provider-runtime` and the lazy boundary in `index.ts`; delete the old modules and their tests. All stub scenarios pass.
 6. Run the live scenario and the print-mode exit check before pushing.
 7. Update `AGENTS.md`, `README.md` and `docs/CONTEXT-POLICY.md` to describe the new architecture and the trace workflow.
+
+## What changed from the plan
+
+Where the real API or the real CLI disagreed with the plan, or the owner overruled it:
+
+- **The trace CLI is an Effect program** (`scripts/trace.ts`), by owner decision, not plain dependency-free Node.
+- **Tracing is on by default** and coverage is narrowed to the pure modules, both by owner decision during the work.
+- **Span events are their own records** in the trace file.
+- **In-band MCP replaced the socket bridge**; every "bridge only" item is gone.
+- **`expectToolCall` moved into the stdout reader**, because the `tools/call` can beat the episode to the `tool_use` block.
+- **Retiring waits for the turn to end, not for an exit**, after the interrupt.
+- **A parked process replaced on the spawn path is retired in the background**, not awaited.
+- **Taking or launching a process is uninterruptible together with recording it**; found by a scenario.
+- **The event bridge is not a reducer**; the boundary owns it in place of a `MutableRef`.
+- **`Layer.withSpan` was not used for `ProviderRuntime.build`**: its span stays open for the layer's lifetime. A short span is emitted once the services are up.
+- **The version check is not `Effect.cached`**, which would also remember "not installed" for the life of the runtime.
+- **`Schema.UnknownFromJsonString` is internal in 4.0.3**; `Schema.fromJsonString(Schema.Unknown)` is the public spelling.
+- **`cross-spawn` is the only spawner**, not a Windows-only seam.
+- **`.ts` import specifiers and `"type": "module"`**, so Node runs the TypeScript directly.
+- **The CLI's presence is no longer checked at registration.** A missing or too-old CLI is an assistant error on the first call, and pi starts about 220 ms sooner.
+- **More retire causes and spawn reasons** than the plan listed, so a trace says which reuse check failed.
