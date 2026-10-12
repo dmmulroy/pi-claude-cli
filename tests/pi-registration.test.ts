@@ -71,7 +71,6 @@ describe("pi ownership at registration", () => {
       await handlers.get(event)();
     }
     expect(retireAllCliProcesses).toHaveBeenCalledTimes(5);
-    expect(setStatus).toHaveBeenCalledWith("claude-rate-limit", undefined);
     expect(setStatus).toHaveBeenCalledWith("claude-subagents", undefined);
   });
 });

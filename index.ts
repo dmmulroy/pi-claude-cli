@@ -24,7 +24,6 @@ import { cleanupRuntimeDir } from "./src/runtime-dir.js";
 import { retireAllCliProcesses } from "./src/cli-process.js";
 import { cliThinkingLevelMap } from "./src/thinking-config.js";
 import { rewriteOverflowMessage } from "./src/overflow.js";
-import { buildRateLimitPayload, rateLimitIdentity } from "./src/rate-limit.js";
 import type { TaskTrackerState } from "./src/types.js";
 import { usesPiContext } from "./src/context-policy.js";
 import { piContext } from "./src/pi-context.js";
@@ -46,45 +45,15 @@ process.on("beforeExit", () => {
 const PROVIDER_ID = "pi-claude-cli";
 
 /**
- * Status key carrying account rate-limit state to the front-end. Neutral
- * (not host-specific) because any pi front-end can read it.
- */
-const RATE_LIMIT_STATUS_KEY = "claude-rate-limit";
-
-/**
  * The stream runs deep inside streamSimple, which has no ExtensionContext,
  * so the ctx handed to session_start is kept for its `ui.setStatus`.
  */
 let uiContext:
   { ui?: { setStatus?(key: string, text?: string): void } } | undefined;
-/** Last payload pushed — the CLI repeats this event on every turn. */
-let lastRateLimitJson: string | undefined;
-
-function publishRateLimit(info: Record<string, unknown>): void {
-  const setStatus = uiContext?.ui?.setStatus;
-  if (typeof setStatus !== "function") return;
-  const payload = buildRateLimitPayload(info);
-  // Push only on change: the event repeats every turn, and a status that
-  // rewrites itself constantly is noise for whatever renders it.
-  const identity = rateLimitIdentity(payload);
-  if (identity === lastRateLimitJson) return;
-  lastRateLimitJson = identity;
-  try {
-    setStatus.call(
-      uiContext!.ui,
-      RATE_LIMIT_STATUS_KEY,
-      JSON.stringify(payload),
-    );
-  } catch {
-    /* never break a turn over a status push */
-  }
-}
-
 /**
  * Live sub-agent state, on its own status key.
  *
- * Same reasoning as the rate-limit channel: this is state ABOUT the turn, not
- * content OF it. `task_progress` fires once per sub-agent tool call (roughly
+ * This is state ABOUT the turn, not content OF it. `task_progress` fires once per sub-agent tool call (roughly
  * 700 times in the incident that motivated #23), so folding it into the
  * transcript would bury the turn and cost context on every later replay. The
  * durable half — one marker when a sub-agent starts, one when it finishes —
@@ -218,15 +187,12 @@ export default function (pi: ExtensionAPI) {
     pi.on("session_start", async (_event: unknown, ctx: unknown) => {
       await retireAllCliProcesses();
       uiContext = ctx as typeof uiContext;
-      lastRateLimitJson = undefined;
       lastSubagentsJson = undefined;
     });
 
     const retire = async () => {
       await retireAllCliProcesses();
-      uiContext?.ui?.setStatus?.(RATE_LIMIT_STATUS_KEY, undefined);
       uiContext?.ui?.setStatus?.(SUBAGENTS_STATUS_KEY, undefined);
-      lastRateLimitJson = undefined;
       lastSubagentsJson = undefined;
     };
     pi.on("model_select", retire);
@@ -247,7 +213,6 @@ export default function (pi: ExtensionAPI) {
         mcpConfig: schema
           ? { ...schema, handoffSocket: ensureHandoffSocket() }
           : undefined,
-        onRateLimit: publishRateLimit,
         onTaskProgress: publishTaskProgress,
       });
     };

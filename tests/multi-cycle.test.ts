@@ -466,7 +466,7 @@ describe("sub-agent visibility (#23)", () => {
   });
 });
 
-describe("rate limit forwarding (account state, not turn content)", () => {
+describe("rate limit events (account state, not turn content)", () => {
   beforeEach(() => {
     resetCliProcessesForTests();
     vi.useFakeTimers();
@@ -474,11 +474,8 @@ describe("rate limit forwarding (account state, not turn content)", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it("hands rate_limit_event to the host and keeps it out of the message", async () => {
-    const seen: Array<Record<string, unknown>> = [];
-    streamViaCli(model, { messages: [{ role: "user", content: "go" }] }, {
-      onRateLimit: (info: Record<string, unknown>) => seen.push(info),
-    } as any);
+  it("keeps rate_limit_event out of the message", async () => {
+    streamViaCli(model, { messages: [{ role: "user", content: "go" }] });
     await vi.advanceTimersByTimeAsync(0);
     const proc = (spawn as any).mock.results[0].value;
 
@@ -505,12 +502,6 @@ describe("rate limit forwarding (account state, not turn content)", () => {
     proc.emit("exit", 0);
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(seen).toHaveLength(1);
-    expect(seen[0]).toMatchObject({
-      rateLimitType: "five_hour",
-      resetsAt: 1787331600,
-    });
-
     const mockStream = MockAssistantMessageEventStream.mock.instances[0];
     const done = mockStream._events.find((e: any) => e.type === "done");
     const text = (done.message.content as any[])
@@ -519,39 +510,6 @@ describe("rate limit forwarding (account state, not turn content)", () => {
       .join("");
     expect(text).not.toContain("rate_limit");
     expect(text).not.toContain("five_hour");
-  });
-
-  it("survives a host callback that throws", async () => {
-    streamViaCli(model, { messages: [{ role: "user", content: "go" }] }, {
-      onRateLimit: () => {
-        throw new Error("host blew up");
-      },
-    } as any);
-    await vi.advanceTimersByTimeAsync(0);
-    const proc = (spawn as any).mock.results[0].value;
-    proc.stdout.write(
-      JSON.stringify({
-        type: "rate_limit_event",
-        rate_limit_info: { status: "allowed", rateLimitType: "five_hour" },
-      }) + "\n",
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    proc.stdout.write(
-      JSON.stringify({
-        type: "result",
-        subtype: "success",
-        result: "still here",
-      }) + "\n",
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    proc.stdout.end();
-    proc.emit("exit", 0);
-    await vi.advanceTimersByTimeAsync(0);
-
-    const mockStream = MockAssistantMessageEventStream.mock.instances[0];
-    expect(
-      mockStream._events.find((e: any) => e.type === "done"),
-    ).toBeDefined();
   });
 });
 
