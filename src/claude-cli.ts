@@ -26,9 +26,9 @@ import {
   MIN_SUPPORTED_CLI_VERSION,
   parseCliVersion,
 } from "./cli-requirements.ts";
-import { crossSpawnSpawnerLayer } from "./cross-spawn-spawner.ts";
 import { CliRequirementError, CliSpawnError } from "./errors.ts";
 import { INBAND_MCP_CONFIG_JSON } from "./mcp-inband.ts";
+import { nodeChildProcessSpawnerLayer } from "./node-platform.ts";
 import { ProviderConfig, providerConfigLayer } from "./provider-config.ts";
 import { type CliThinking, thinkingSpawnArgs } from "./thinking-config.ts";
 
@@ -280,7 +280,9 @@ export const claudeCliLayerWithoutDependencies = Layer.effect(
   makeClaudeCli,
 );
 
-/** Provides the CLI launcher over `cross-spawn` and the process environment. */
+/** Provides the CLI launcher over Node's spawner and the process environment. */
 export const claudeCliLayer = claudeCliLayerWithoutDependencies.pipe(
-  Layer.provide(Layer.mergeAll(crossSpawnSpawnerLayer, providerConfigLayer)),
+  Layer.provide(
+    Layer.mergeAll(nodeChildProcessSpawnerLayer, providerConfigLayer),
+  ),
 );

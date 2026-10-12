@@ -60,7 +60,7 @@ A custom tracer returns a subclass of `Tracer.NativeSpan` that appends one NDJSO
 
 ### Trace CLI
 
-`scripts/trace.ts` is an Effect program (`effect/cli` commands over `FileSystem`, `Path` and `ChildProcessSpawner`), run directly by Node's type stripping: `node scripts/trace.ts <command>` or `npm run trace -- <command>`. The original plan asked for plain Node with no Effect import so the tool would survive a broken rewrite; the owner overruled that in favour of Effect everywhere. The CLI imports only `src/trace-location.ts`, `src/node-platform.ts` and `src/cross-spawn-spawner.ts`, so a broken provider still leaves it working.
+`scripts/trace.ts` is an Effect program (`effect/cli` commands over `FileSystem`, `Path` and `ChildProcessSpawner`), run directly by Node's type stripping: `node scripts/trace.ts <command>` or `npm run trace -- <command>`. The original plan asked for plain Node with no Effect import so the tool would survive a broken rewrite; the owner overruled that in favour of Effect everywhere. The CLI imports only `src/trace-location.ts` and `src/node-platform.ts`, so a broken provider still leaves it working.
 
 With no `--file` a command reads `PI_CLAUDE_CLI_TRACE` when it names a file, otherwise the newest daily file in the default location, so `trace tree --last` works straight after any session. `--run` reads the file of the most recent `trace run`.
 
@@ -95,7 +95,7 @@ Most scenarios run `scripts/scenarios/driver.ts`, which calls the provider runti
 | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
 | `fresh-spawn`                                                            | `episode` with `mode=spawn`, `outcome=done`; one `ClaudeCli.spawn`; one `park`                                                 |
 | `warm-turn`                                                              | Second `episode` with `mode=turn`; one `ClaudeCli.spawn` in total; same pid                                                    |
-| `tool-handoff`                                                           | `outcome=toolUse`; `park` at the handoff idle time; next `episode` with `mode=handoff`, same pid; `toolCall` ok                |
+| `tool-handoff`, `tool-handoff-parallel`                                  | `outcome=toolUse`; `park` at the handoff idle time; next `episode` with `mode=handoff`, same pid; `toolCall` ok                |
 | `tool-abandoned`                                                         | A user message instead of the tool result: `spawnReason=handoffMismatch`; `toolCall` interrupted; the blocked process retired  |
 | `handoff-proxy-off`                                                      | `PI_CLAUDE_CLI_HANDOFF_PROXY=0`: no `toolCall`; `retire` with `cause=interrupted`; the tool result is reimported               |
 | `changed-history`, `changed-prompt`, `changed-tools`, `foreign-provider` | `mode=spawn` with the matching `spawnReason`; the old process retired with `cause=history` or `cause=signature`; distinct pids |
@@ -127,6 +127,8 @@ What this means for the test suite:
 
 Before the rewrite a tool call left the CLI through `mcp-schema-server.cjs`, a unix socket, a shared secret and a handoff broker. Claude Code can instead host an MCP server in-band over the stdio control channel (`"type": "sdk"`, the Agent SDK's mechanism). The spike settled it: **the in-band route is taken and the socket bridge is gone.**
 
+The spike is kept as `scripts/spikes/inband-mcp.ts` so it can be repeated against a new Claude Code version (`probe` spends no tokens; `round-trip`, `timeout` and `list-changed` run one or two haiku turns; `--claude <path>` probes another binary).
+
 Spike results, on 2.1.292 and repeated on the 2.1.263 floor:
 
 1. **A `tools/call` round trip held open works.** The call arrives as `control_request {subtype: "mcp_message"}`; the answer is a `control_response` carrying `mcp_response`. Held for 3 s while "pi ran the tool", then the turn continued in-process.
@@ -135,7 +137,7 @@ Spike results, on 2.1.292 and repeated on the 2.1.263 floor:
 4. **The call has a timeout and `MCP_TOOL_TIMEOUT` governs it.** At `2000` the CLI told the model the tool timed out after 2 s and sent `notifications/cancelled {reason: "SdkError: Request timed out"}`. The provider keeps setting it to one hour.
 5. **The floor behaves the same.** 2.1.263 lists the tools at start and completes the round trip.
 6. **The `initialize` control request is not required.** Without it the CLI still sends MCP `initialize`, `notifications/initialized` and `tools/list` within half a second of launch.
-7. **`mcp_set_servers` with the same server is a no-op** (`{added: [], removed: []}`), but an MCP `notifications/tools/list_changed` sent as an `mcp_message` makes the CLI ask for `tools/list` again, and `mcp_status` then reports the new tool. Whether the model sees the new surface on its next turn was not tested, so a changed tool surface still retires the process.
+7. **`mcp_set_servers` with the same server is a no-op** (`{added: [], removed: []}`). An MCP `notifications/tools/list_changed` sent as an `mcp_message` is the way to change the surface, **on 2.1.292 only**: the CLI asks for `tools/list` again within milliseconds, and on the next turn the model was offered and called the new tool on the live process. On the 2.1.263 floor the notification is acknowledged and nothing is re-listed. A changed tool surface therefore still retires the process; see "Status and next steps".
 
 One thing the spike showed that the plan had not anticipated: the `tools/call` and the `message_stop` of the assistant message that asked for it arrive in either order. See "State that becomes Effect primitives".
 
@@ -331,6 +333,13 @@ The pool owns `launch` because the pool's scope is the parent of every process s
 
 `ClaudeCli` wraps `ChildProcessSpawner` (launch flags, env stripping, version and auth checks). `ProviderConfig` and `RuntimeDirectory` are the remaining services. Session and tool-use ids are plain strings; the plan's branded id types were not introduced.
 
+### Spawning
+
+- **Env stripping.** `extendEnv: true` with `env: { ANTHROPIC_API_KEY: undefined, ... }` removes the variables from the child **(tested)**. The `env-stripping` scenario reads the child's real environment; this is invariant 6.
+- **`detached: false`, explicitly.** Effect defaults to `detached: true`, which puts the child in its own process group **(tested)**. Ctrl-C in `pi -p` would then no longer reach `claude`. With `false`, the spawner's group kill fails and falls back to a plain kill.
+- **`killSignal: "SIGKILL"`.** The process scope's own finalizer asks the CLI to exit first; the spawner's finalizer only has to end what is still running after that.
+- **Windows is not supported.** Effect's Node spawner calls `child_process.spawn` directly and cannot launch `claude.cmd`; the plan kept `cross-spawn` behind a custom `ChildProcessSpawner` for that. The owner decided Windows does not matter, so that spawner and the `cross-spawn` dependency were deleted and `NodeChildProcessSpawner.layer` is used as is. Empty arguments (`--tools ""`) reach the CLI intact; the `launch-flags` scenario checks it.
+
 ## The episode
 
 ```text
@@ -377,7 +386,6 @@ src/
 ├── claude-process-pool.ts    # service: launch, take, park, retire
 ├── claude-process.ts         # scoped process resource
 ├── claude-cli.ts             # service: launch flags, env, version and auth checks
-├── cross-spawn-spawner.ts    # ChildProcessSpawner layer over cross-spawn
 ├── runtime-directory.ts      # service: private temp dir, system prompt files
 ├── provider-config.ts        # service: environment configuration
 ├── mcp-inband.ts             # pure: the in-band MCP server's protocol
@@ -388,7 +396,7 @@ src/
 ├── terminal-event.ts         # plain: done / error events (no Effect import)
 ├── tracing.ts                # file tracer, tracerLogger layer
 ├── trace-location.ts         # where traces are written; shared with the CLI
-├── node-platform.ts          # Node FileSystem, Path, Crypto layers
+├── node-platform.ts          # Node FileSystem, Path, Crypto, ChildProcessSpawner layers
 ├── event-bridge.ts           # CLI stream events → pi events and the partial message
 └── pi-context.ts, thinking-config.ts, overflow.ts, tool-mapping.ts   # stay pure
 scripts/
@@ -416,7 +424,7 @@ Import paths are for 4.0.3: `effect/process`, `effect/cli`, with no `unstable/` 
 - **Process:** `effect/process` `ChildProcess` + `ChildProcessSpawner`.
 - **Scripts:** `effect/cli` `Command`, `Flag`, `Argument`; `Console`; `Runtime.errorExitCode` for exit codes.
 - **Planned and not used:** `SynchronizedRef`, `MutableRef`, `Match`, `ConfigProvider`, `Config.schema`, `makeTempFileScoped`, and `effect/ai/McpSchema` (the four MCP methods are typed with a few small `Schema` structs in `cli-protocol.ts` instead).
-- **Node platform:** `@effect/platform-node-shared`, not `@effect/platform-node`, and imported by narrow entrypoint (`@effect/platform-node-shared/NodeFileSystem`), never the barrel: the barrel also loads the socket, cluster and `ws` modules, about 80 ms and 25 MB **(tested)**. The shared package has every layer needed (filesystem, path, crypto, stream and sink adapters) and depends only on `ws`. `@effect/platform-node` adds `undici` and a non-optional `redis` peer, which would land in every pi install. Its `NodeServices.layer` is a plain merge that is easy to write by hand.
+- **Node platform:** `@effect/platform-node-shared`, not `@effect/platform-node`, and imported by narrow entrypoint (`@effect/platform-node-shared/NodeFileSystem`), never the barrel: the barrel also loads the socket, cluster and `ws` modules, about 80 ms and 25 MB **(tested)**. The shared package has every layer needed (spawner, filesystem, path, crypto) and depends only on `ws`. `@effect/platform-node` adds `undici` and a non-optional `redis` peer, which would land in every pi install. Its `NodeServices.layer` is a plain merge that is easy to write by hand.
 - **Testing:** none planned. Verification is by trace; see "Verification by scenario". `TestClock`, `TestCrypto`, `FileSystem.layerNoop` and a fake `ChildProcessSpawner` exist if a case turns out to need them. `@effect/vitest` 4.0.3 requires vitest 5 (the repo is on 3.2.7) and is not adopted.
 - **Considered and rejected:**
   - `Pool`, `RcRef`, `ScopedRef`, `LayerMap`: wrong sharing model for an exclusive, request-dependent process.
@@ -444,8 +452,8 @@ Import paths are for 4.0.3: `effect/process`, `effect/cli`, with no `unstable/` 
 
 1. **The in-band MCP spike.** Done; in-band route taken. See "Decide the tool bridge first".
 2. **Dynamic import under pi's bundled jiti.** Works: `npm run test:e2e` and the `print-mode-exit` scenario load `src/provider-runtime.ts` through it.
-3. **Windows launch**, through the `cross-spawn` spawner layer. **Not verified.** The spawner is exercised on macOS only; CI's Windows job runs the unit tests, which no longer touch it.
-4. **Print mode exits** after a turn with a parked process. Verified with the stub (`print-mode-exit`) and once live through real `pi -p` with a real tool call.
+3. **Windows launch.** Dropped: Windows is not supported, by owner decision.
+4. **Print mode exits** after a turn with a parked process. Verified with the stub (`print-mode-exit`, on pi 0.84.2, 0.87.1 and 1.1.0) and live through real `pi -p` with a real tool call.
 5. **Every scenario** passes its `trace assert`: `npm run test:scenarios`.
 6. **The coverage floors.** Settled: coverage is narrowed to the pure modules and the floors hold there.
 
@@ -461,6 +469,36 @@ Already settled: streaming latency (lines arrive per write) and load cost (about
 5. Pool and `runEpisode`; `provider-runtime` and the lazy boundary in `index.ts`; delete the old modules and their tests. All stub scenarios pass.
 6. Run the live scenario and the print-mode exit check before pushing.
 7. Update `AGENTS.md`, `README.md` and `docs/CONTEXT-POLICY.md` to describe the new architecture and the trace workflow.
+
+## Status and next steps
+
+The rewrite is complete on the local branch `effect-rewrite` and has not been pushed. Pushing is the release: pi installs this package from git.
+
+What has been verified, and how:
+
+| What                                                            | How                                                                                                           |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Every service path against the stub CLI                         | `npm run test:scenarios`: 31 scenarios, each asserting on its trace and on `--no-open`                        |
+| Registration, lazy load under jiti, print-mode exit             | `npm run test:e2e` and `print-mode-exit`, on pi 0.84.2, 0.87.1 and 1.1.0                                      |
+| One turn, a held-open tool call, a warm follow-up, real CLI     | `node scripts/scenarios.ts --live` on Claude Code 2.1.292                                                     |
+| Real pi tools and guards, a provider switch, compaction, recall | `tests/live-pi-roundtrip.test.ts`                                                                             |
+| Thinking changes on a live process, read off the wire           | `tests/live-thinking.test.ts`: haiku 4.5 and sonnet 5, four levels each on one process, and a mid-tool change |
+| The in-band MCP protocol on the version floor                   | `scripts/spikes/inband-mcp.ts` against Claude Code 2.1.263                                                    |
+| The pure modules                                                | `npm run test:coverage`: 92% / 85% floors over five modules                                                   |
+
+Known limits:
+
+- **Windows is not supported.**
+- **The provider has only run on macOS.** CI will run the unit tests, e2e and scenarios on Linux once the branch is pushed; none of that has run there yet.
+- **Only the in-band protocol was run on the 2.1.263 floor**, not the provider's scenarios or live tests.
+- **Parallel tool calls are verified against the stub only** (`tool-handoff-parallel`); no live run produced two tool calls in one message.
+- **`event-bridge.ts` is still an accumulator** and session and tool-use ids are plain strings; see "What changed from the plan".
+
+Worth doing next, in order of value:
+
+1. **Change the tool surface on a live process.** Today a different tool list retires the process and reimports pi's whole history, which misses the prompt cache for the conversation. On 2.1.292 `notifications/tools/list_changed` avoids that (spike result 7). It needs a version gate, because the 2.1.263 floor ignores the notification, or a raised floor; `ClaudeProcess` would gain an `applyTools` beside `applyThinking`, and `tools` would leave the launch signature.
+2. **Raise the version floor** once nobody is on 2.1.263, and rerun the spike's `probe` on each new Claude Code release: the wire format is undocumented.
+3. **An OTLP exporter** (`effect/observability`'s `OtlpTracer.layer`) beside the file sink, if traces are ever wanted in a collector.
 
 ## What changed from the plan
 
@@ -478,7 +516,7 @@ Where the real API or the real CLI disagreed with the plan, or the owner overrul
 - **`Layer.withSpan` was not used for `ProviderRuntime.build`**: its span stays open for the layer's lifetime. A short span is emitted once the services are up.
 - **The version check is not `Effect.cached`**, which would also remember "not installed" for the life of the runtime.
 - **`Schema.UnknownFromJsonString` is internal in 4.0.3**; `Schema.fromJsonString(Schema.Unknown)` is the public spelling.
-- **`cross-spawn` is the only spawner**, not a Windows-only seam.
+- **No custom spawner and no `cross-spawn`.** Windows support was dropped by owner decision, so Effect's Node spawner is used directly.
 - **`.ts` import specifiers and `"type": "module"`**, so Node runs the TypeScript directly.
 - **The CLI's presence is no longer checked at registration.** A missing or too-old CLI is an assistant error on the first call, and pi starts about 220 ms sooner.
 - **More retire causes and spawn reasons** than the plan listed, so a trace says which reuse check failed.

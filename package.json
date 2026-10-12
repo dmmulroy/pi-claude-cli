@@ -1,6 +1,6 @@
 {
   "name": "@saccolabs/pi-claude-cli",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "Pi coding agent extension that routes LLM calls through the Claude Code CLI",
   "main": "index.ts",
@@ -23,14 +23,12 @@
   },
   "dependencies": {
     "@effect/platform-node-shared": "4.0.3",
-    "cross-spawn": "^7.0.6",
     "effect": "4.0.3"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-coding-agent": "0.87.1",
     "@eslint/js": "^9.39.4",
-    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^3.2.4",
     "eslint": "^9.39.4",

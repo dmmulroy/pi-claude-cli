@@ -115,9 +115,9 @@ export default function (pi: ExtensionAPI) {
 
     // Overflow recovery: rewrite provider-scoped context-limit errors to
     // the prefix pi's auto-compaction recognizes (see src/overflow.ts).
-    (pi.on as any)("message_end", (event: any, ctx: any) => {
-      return rewriteOverflowMessage(event?.message ?? {}, ctx?.model?.provider);
-    });
+    pi.on("message_end", (event, ctx) =>
+      rewriteOverflowMessage(event.message, ctx.model?.provider),
+    );
 
     pi.registerProvider(PROVIDER_ID, {
       baseUrl: "pi-claude-cli",

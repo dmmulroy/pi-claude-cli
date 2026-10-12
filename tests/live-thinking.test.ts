@@ -2,7 +2,7 @@
  * Live: pi's thinking level, changed mid-session, reaches the model on the
  * very next turn through ONE Claude CLI process.
  *
- * What the model receives is read off the wire: ANTHROPIC_BASE_URL points
+ * What the model receives is read off the wire: a `claude` wrapper points
  * the CLI at a local proxy that forwards to api.anthropic.com and records four
  * request-body fields (model, thinking, output_config, tool count). It never
  * records headers, so no credential is written anywhere. A `claude` wrapper
@@ -82,14 +82,19 @@ async function startProxy() {
 }
 
 /**
- * A `claude` on PATH that records each turn process, then runs the real one.
+ * A `claude` on PATH that records each turn process, then runs the real one
+ * against the recording proxy.
+ *
+ * The wrapper, not pi's environment, points the CLI at the proxy: the
+ * provider never forwards ANTHROPIC_BASE_URL to the CLI, so setting it on pi
+ * would be stripped before it got here.
  *
  * pi and this test may run under a scratch HOME; the real CLI gets the
  * account's own home (from the passwd entry, not the environment), because
- * that is where its login lives. It writes no transcript either way: pi
- * context spawns it with --no-session-persistence.
+ * that is where its login lives. It writes no transcript either way: the
+ * provider spawns it with --no-session-persistence.
  */
-function spawnCounter(dir: string) {
+function spawnCounter(dir: string, proxyUrl: string) {
   const real = execSync("command -v claude", { encoding: "utf8" }).trim();
   const home = userInfo().homedir;
   const log = join(dir, "spawns.log");
@@ -99,7 +104,7 @@ function spawnCounter(dir: string) {
   const wrapper = join(bin, "claude");
   writeFileSync(
     wrapper,
-    `#!/bin/sh\ncase "$*" in *--input-format*) echo spawn >> "${log}";; esac\nHOME="${home}" exec "${real}" "$@"\n`,
+    `#!/bin/sh\ncase "$*" in *--input-format*) echo spawn >> "${log}";; esac\nANTHROPIC_BASE_URL="${proxyUrl}" HOME="${home}" exec "${real}" "$@"\n`,
   );
   chmodSync(wrapper, 0o755);
   return {
@@ -164,7 +169,7 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")(
         mkdirSync(join(dir, "agent"));
         writeFileSync(join(dir, "agent", "settings.json"), "{}");
         const proxy = await startProxy();
-        const spawns = spawnCounter(dir);
+        const spawns = spawnCounter(dir, proxy.url);
         const client = new RpcClient({
           cliPath: resolve(
             "node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
@@ -172,8 +177,7 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")(
           cwd: dir,
           env: {
             PI_CODING_AGENT_DIR: join(dir, "agent"),
-            PI_CLAUDE_CLI_STATE_DIR: join(dir, "state"),
-            ANTHROPIC_BASE_URL: proxy.url,
+            XDG_STATE_HOME: join(dir, "state"),
             PATH: `${spawns.bin}:${process.env.PATH}`,
           },
           provider: "pi-claude-cli",
@@ -245,7 +249,7 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")(
       mkdirSync(join(dir, "agent"));
       writeFileSync(join(dir, "agent", "settings.json"), "{}");
       const proxy = await startProxy();
-      const spawns = spawnCounter(dir);
+      const spawns = spawnCounter(dir, proxy.url);
       const client = new RpcClient({
         cliPath: resolve(
           "node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
@@ -253,8 +257,7 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")(
         cwd: dir,
         env: {
           PI_CODING_AGENT_DIR: join(dir, "agent"),
-          PI_CLAUDE_CLI_STATE_DIR: join(dir, "state"),
-          ANTHROPIC_BASE_URL: proxy.url,
+          XDG_STATE_HOME: join(dir, "state"),
           PATH: `${spawns.bin}:${process.env.PATH}`,
         },
         provider: "pi-claude-cli",

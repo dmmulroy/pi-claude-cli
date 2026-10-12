@@ -11,8 +11,10 @@
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
 import { Console, Data, Effect, FileSystem, Layer, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { crossSpawnSpawnerLayer } from "../../src/cross-spawn-spawner.ts";
-import { nodeFileSystemLayer } from "../../src/node-platform.ts";
+import {
+  nodeChildProcessSpawnerLayer,
+  nodeFileSystemLayer,
+} from "../../src/node-platform.ts";
 import {
   dailyTraceFileName,
   TRACE_DIRECTORY_MODE,
@@ -117,7 +119,9 @@ const main = Effect.gen(function* () {
   Effect.tapError((error) =>
     Console.error(`scenario FAILED: ${error.message}`),
   ),
-  Effect.provide(Layer.merge(nodeFileSystemLayer, crossSpawnSpawnerLayer)),
+  Effect.provide(
+    Layer.merge(nodeFileSystemLayer, nodeChildProcessSpawnerLayer),
+  ),
 );
 
 NodeRuntime.runMain(main, { disableErrorReporting: true });

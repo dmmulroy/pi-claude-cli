@@ -17,6 +17,7 @@ npm run test:coverage     # unit tests of the pure modules
 npm run test:scenarios    # the gate for the Effect services: stub scenarios + trace assertions
 npm run test:e2e          # real pi, stub CLI
 node scripts/scenarios.ts --live   # spends subscription tokens
+PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts   # spends more
 ```
 
 Coverage floors: 92% lines/functions/statements, 85% branches, over the pure modules listed in `vitest.config.ts`. The services have no unit tests; `test:scenarios` is their gate.
@@ -44,7 +45,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - `src/episode-mode.ts`: pure decision between `spawn`, `turn` and `handoff`, and the launch signature.
 - `src/claude-process-pool.ts`: launches processes and parks one per pi session. Its scope is the parent of every process scope.
 - `src/claude-process.ts`: one CLI process and everything it owns, in one scope. The stdout reader answers permission and MCP requests whether or not an episode is attached. `retire` closes the scope.
-- `src/claude-cli.ts`, `src/cross-spawn-spawner.ts`: launch flags and environment. Replaces Claude Code's prompt, disables native tools and session persistence, preserves explicit host guards and OAuth. Never use `--bare`.
+- `src/claude-cli.ts`: launch flags and environment, over Effect's Node `ChildProcessSpawner`. Replaces Claude Code's prompt, disables native tools and session persistence, preserves explicit host guards and OAuth. Never use `--bare`.
 - `src/mcp-inband.ts`: the in-band (`"type": "sdk"`) MCP server that advertises pi's tools on the CLI's own control channel. No socket, no helper process, no secret. A `tools/call` is held open until pi's next call delivers the result, matched on the actual tool-use id and name.
 - `src/cli-protocol.ts`: lenient `Schema` decoding of the CLI's NDJSON; builders for stdin lines.
 - `src/event-bridge.ts`: convert CLI stream events to pi messages. Content indexes restart each model cycle, so blocks are tracked by `(cycle, index)`.
@@ -70,7 +71,10 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - Never await a `retire` on a path that ends pi's stream; use `pool.retireInBackground`.
 - The package is an ES module and local TypeScript is imported with `.ts` specifiers, so `node scripts/x.ts` runs under Node's type stripping (Node 22.18+). That rules out enums, namespaces and parameter properties.
 - Import `@effect/platform-node-shared` by narrow entrypoint, never its barrel.
+- No `any` outside `tests/`; lint enforces it. Decode unknown input with `Schema` at the boundary and use pi's own types (`Message`, `Tool`, `Model<Api>`) inside.
+- Windows is not supported; do not add code for it.
 - Tests live in `tests/`; `tests/live-*.test.ts` are opt-in and spend tokens.
+- `scripts/spikes/inband-mcp.ts` probes the real CLI's in-band MCP protocol. Rerun its `probe` mode (no tokens) when a new Claude Code version misbehaves.
 
 ## Installing a change
 

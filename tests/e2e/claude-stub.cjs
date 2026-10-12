@@ -16,6 +16,8 @@
  *   tool:<name>     streams a tool_use for pi's tool <name>, asks permission,
  *                   calls it through MCP, and after pi's answer streams
  *                   "TOOL-DONE <result text>" and ends the turn
+ *   tools:<a>,<b>   the same with several tool_use blocks in one message and
+ *                   every call open at once; results are joined with "|"
  *   hang            starts a message and never finishes it
  *   die             starts a message, writes to stderr, exits with code 3
  *   failturn        ends the turn with an error result
@@ -187,42 +189,65 @@ const endInterruptedTurn = () => {
   emit({ type: "result", subtype: "error_during_execution", is_error: true });
 };
 
-const toolTurn = async (piToolName) => {
-  const toolUseId = `toolu_stub_${process.pid}_${++toolSeq}`;
-  const name = `mcp__${sdkServer}__${piToolName}`;
+/** One assistant message asking for each named pi tool, then their calls. */
+const toolTurn = async (piToolNames) => {
   const input = { path: "stub.txt" };
+  const uses = piToolNames.map((piToolName, index) => ({
+    index,
+    piToolName,
+    toolUseId: `toolu_stub_${process.pid}_${++toolSeq}`,
+    name: `mcp__${sdkServer}__${piToolName}`,
+  }));
   messageStart();
-  streamEvent({
-    type: "content_block_start",
-    index: 0,
-    content_block: { type: "tool_use", id: toolUseId, name, input: {} },
-  });
-  streamEvent({
-    type: "content_block_delta",
-    index: 0,
-    delta: { type: "input_json_delta", partial_json: JSON.stringify(input) },
-  });
-  streamEvent({ type: "content_block_stop", index: 0 });
+  for (const use of uses) {
+    streamEvent({
+      type: "content_block_start",
+      index: use.index,
+      content_block: {
+        type: "tool_use",
+        id: use.toolUseId,
+        name: use.name,
+        input: {},
+      },
+    });
+    streamEvent({
+      type: "content_block_delta",
+      index: use.index,
+      delta: { type: "input_json_delta", partial_json: JSON.stringify(input) },
+    });
+    streamEvent({ type: "content_block_stop", index: use.index });
+  }
 
   const interrupted = new Promise((_, reject) => (interruptTurn = reject));
-  const permission = askPermission(name, toolUseId, input);
+  const permissions = Promise.all(
+    uses.map((use) => askPermission(use.name, use.toolUseId, input)),
+  );
   messageEnd("tool_use");
-  const decision = await Promise.race([permission, interrupted]);
-  if (decision?.behavior !== "allow") {
+  const decisions = await Promise.race([permissions, interrupted]);
+  if (decisions.some((decision) => decision?.behavior !== "allow")) {
     // Denied: the real CLI feeds the model the denial; the provider is
     // expected to interrupt the turn instead of letting it continue.
     await interrupted;
     return;
   }
-  const call = mcp("tools/call", {
-    name: piToolName,
-    arguments: input,
-    _meta: { "claudecode/toolUseId": toolUseId, progressToken: rpcSeq },
-  });
-  const answer = await Promise.race([call, interrupted]);
-  const text = (answer.response?.result?.content ?? [])
-    .map((block) => block.text ?? "")
-    .join("");
+  // Every call is open at once, the hardest case for matching results.
+  const calls = Promise.all(
+    uses.map((use) =>
+      mcp("tools/call", {
+        name: use.piToolName,
+        arguments: input,
+        _meta: { "claudecode/toolUseId": use.toolUseId, progressToken: rpcSeq },
+      }),
+    ),
+  );
+  const answers = await Promise.race([calls, interrupted]);
+  const text = answers
+    .map((answer) =>
+      (answer.response?.result?.content ?? [])
+        .map((block) => block.text ?? "")
+        .join(""),
+    )
+    .join("|");
   emit({ type: "user", message: { role: "user", content: [] } });
   cycle(`TOOL-DONE ${text}`);
   turnActive = false;
@@ -232,9 +257,9 @@ const toolTurn = async (piToolName) => {
 const startTurn = (text) => {
   turnActive = true;
   emit({ type: "system", subtype: "init", session_id: "stub-session" });
-  const tool = /tool:([A-Za-z0-9_-]+)/.exec(text);
+  const tool = /tools?:([A-Za-z0-9_,-]+)/.exec(text);
   if (tool) {
-    toolTurn(tool[1]).catch(endInterruptedTurn);
+    toolTurn(tool[1].split(",")).catch(endInterruptedTurn);
     return;
   }
   if (text.includes("hang")) {

@@ -148,7 +148,7 @@ const scenarioSession = Effect.fn("ScenarioDriver.session")(function* (
   ) => Effect.andThen(user(text), call(options, onEvent));
 
   /** Answer every tool call of the latest assistant message, as pi would. */
-  const answerToolCalls = (text: string) =>
+  const answerToolCalls = (text: string | ((toolName: string) => string)) =>
     Effect.gen(function* () {
       const { messages } = yield* Ref.get(conversation);
       const latest = messages[messages.length - 1];
@@ -159,7 +159,12 @@ const scenarioSession = Effect.fn("ScenarioDriver.session")(function* (
           role: "toolResult",
           toolCallId: block.id,
           toolName: block.name,
-          content: [{ type: "text", text }],
+          content: [
+            {
+              type: "text",
+              text: typeof text === "string" ? text : text(block.name),
+            },
+          ],
           isError: false,
           timestamp: Date.now(),
         });
@@ -248,6 +253,24 @@ const scenarios: Record<
       yield* expect(
         tools.trim() === JSON.stringify(["read", "bash"]),
         `expected the CLI to be offered exactly pi's tools, got ${tools}`,
+      );
+    }),
+
+  "tool-handoff-parallel": (session) =>
+    Effect.gen(function* () {
+      const asked = yield* session.say("please tools:read,bash");
+      const names = asked.content.flatMap((block) =>
+        block.type === "toolCall" ? [block.name] : [],
+      );
+      yield* expect(
+        asked.stopReason === "toolUse" && names.join() === "read,bash",
+        `expected read and bash toolCalls in one message, got ${asked.stopReason}: ${names.join()}`,
+      );
+      // Each result must reach the call that asked for it.
+      yield* session.answerToolCalls((toolName) => `${toolName}-RESULT`);
+      yield* expectDone(
+        yield* session.call(),
+        "TOOL-DONE read-RESULT|bash-RESULT",
       );
     }),
 

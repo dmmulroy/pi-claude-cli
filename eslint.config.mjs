@@ -18,7 +18,6 @@ export default defineConfig([
   {
     files: ["**/*.ts"],
     rules: {
-      "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": [
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
@@ -26,8 +25,10 @@ export default defineConfig([
     },
   },
   {
-    files: ["tests/**/*.ts"],
+    files: ["tests/**/*.ts", "test-tool-extension.ts"],
     rules: {
+      // Fixtures stand in for pi's and the CLI's loosely typed objects.
+      "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-require-imports": "off",
     },
   },

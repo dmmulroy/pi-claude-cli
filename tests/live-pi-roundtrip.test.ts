@@ -23,7 +23,11 @@ it.skipIf(process.env.PI_OWNED_LIVE !== "1")(
       JSON.stringify({
         compaction: {
           enabled: true,
-          keepRecentTokens: 128,
+          // Small enough that this short session always has something
+          // older than the kept tail. At 128 the manual compaction below
+          // failed with "session too small" whenever the model answered
+          // tersely: the whole session is only about 180 estimated tokens.
+          keepRecentTokens: 32,
           reserveTokens: 2048,
         },
       }),

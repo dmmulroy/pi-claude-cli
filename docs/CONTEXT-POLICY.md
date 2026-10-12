@@ -50,7 +50,7 @@ npm run test:coverage
 npm run test:scenarios
 npm run test:e2e
 node scripts/scenarios.ts --live
-PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts
+PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts
 ```
 
-The live checks use isolated fixtures, not user integrations, and spend subscription tokens. The live scenario runs one turn, one tool call held open and one warm follow-up on a single process. The real-pi RPC check executes read/edit, enforces a pi guard, switches through a deterministic native provider, then performs pi compaction and verifies recall. Neither asserts a universal token saving.
+The live checks use isolated fixtures, not user integrations, and spend subscription tokens. The live scenario runs one turn, one tool call held open and one warm follow-up on a single process. The real-pi RPC check executes read/edit, enforces a pi guard, switches through a deterministic native provider, then performs pi compaction and verifies recall. The thinking check reads the requests off the wire through a local proxy and confirms each level change reaches the model on one process. None asserts a universal token saving.

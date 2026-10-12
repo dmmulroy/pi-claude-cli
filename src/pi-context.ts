@@ -1,6 +1,12 @@
 import { createHash } from "node:crypto";
-import * as ai from "@earendil-works/pi-ai";
-import type { Message, Tool } from "@earendil-works/pi-ai";
+import {
+  type Context,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  type Message,
+  type Tool,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import type { CliUserContentBlock } from "./cli-protocol.ts";
 
 /** pi's request with its current prompt and tools resolved. */
@@ -12,45 +18,45 @@ export interface PiRequest {
 }
 
 /** Accept both pi's legacy Context and its system-message TranscriptContext. */
-export function piContext(context: {
-  messages: any[];
-  systemPrompt?: string;
-  tools?: any[];
-}): PiRequest {
+export function piContext(context: Context | TranscriptContext): PiRequest {
   const transcript = context.messages.some((m) => m.role === "system");
   return {
     systemPrompt: transcript
-      ? (ai as any).getCurrentSystemPrompt(context.messages)
-      : (context.systemPrompt ?? ""),
+      ? getCurrentSystemPrompt(context.messages)
+      : "systemPrompt" in context
+        ? (context.systemPrompt ?? "")
+        : "",
     tools: transcript
-      ? (ai as any).getCurrentTools(context.messages)
-      : (context.tools ?? []),
+      ? getCurrentTools(context.messages)
+      : "tools" in context
+        ? (context.tools ?? [])
+        : [],
     messages: context.messages.filter((m) => m.role !== "system"),
   };
 }
 
 /** Compare model-visible history, not usage, timestamps, or provider signatures. */
-export function historyHash(messages: ReadonlyArray<any>): string {
+export function historyHash(messages: ReadonlyArray<Message>): string {
   const visible = messages.map((m) => ({
     role: m.role,
-    content: Array.isArray(m.content)
-      ? m.content
-          .filter((b: any) => b.type !== "thinking")
-          .map((b: any) => {
-            if (b.type === "text") return { type: b.type, text: b.text };
-            return b;
-          })
-      : m.content,
-    toolCallId: m.toolCallId,
-    toolName: m.toolName,
-    isError: m.isError,
+    content:
+      typeof m.content === "string"
+        ? m.content
+        : m.content
+            .filter((b) => b.type !== "thinking")
+            .map((b) =>
+              b.type === "text" ? { type: b.type, text: b.text } : b,
+            ),
+    ...(m.role === "toolResult"
+      ? { toolCallId: m.toolCallId, toolName: m.toolName, isError: m.isError }
+      : {}),
   }));
   return createHash("sha256").update(JSON.stringify(visible)).digest("hex");
 }
 
 /** Import in order, including every image and tool result. Never replay thinking. */
 export function replayPiMessages(
-  messages: ReadonlyArray<any>,
+  messages: ReadonlyArray<Message>,
 ): CliUserContentBlock[] {
   const blocks: CliUserContentBlock[] = [];
   for (const message of messages) {
@@ -58,14 +64,14 @@ export function replayPiMessages(
       type: "text",
       text:
         message.role === "toolResult"
-          ? `TOOL RESULT (${message.toolName}, id=${message.toolCallId}, error=${!!message.isError}):`
+          ? `TOOL RESULT (${message.toolName}, id=${message.toolCallId}, error=${message.isError}):`
           : `${message.role.toUpperCase()}:`,
     });
-    const content =
-      typeof message.content === "string"
-        ? [{ type: "text", text: message.content }]
-        : (message.content ?? []);
-    for (const b of content) {
+    if (typeof message.content === "string") {
+      blocks.push({ type: "text", text: message.content });
+      continue;
+    }
+    for (const b of message.content) {
       if (b.type === "text") blocks.push({ type: "text", text: b.text });
       else if (b.type === "image")
         blocks.push({

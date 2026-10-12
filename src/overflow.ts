@@ -37,15 +37,14 @@ export function isOverflowError(errorMessage: string): boolean {
  * this provider produced a recognizable overflow error, undefined otherwise
  * (pi keeps the message unchanged).
  */
-export function rewriteOverflowMessage(
-  message: {
+export function rewriteOverflowMessage<
+  M extends {
     role?: string;
     provider?: string;
     stopReason?: string;
     errorMessage?: string;
   },
-  ctxProvider?: string,
-): { message: Record<string, unknown> } | undefined {
+>(message: M, ctxProvider?: string): { message: M } | undefined {
   if (message.role !== "assistant") return undefined;
   if (message.stopReason !== "error") return undefined;
   if (message.provider !== "pi-claude-cli" && ctxProvider !== "pi-claude-cli")

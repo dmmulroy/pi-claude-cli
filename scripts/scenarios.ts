@@ -32,8 +32,10 @@ import {
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { crossSpawnSpawnerLayer } from "../src/cross-spawn-spawner.ts";
-import { nodeFileSystemLayer } from "../src/node-platform.ts";
+import {
+  nodeChildProcessSpawnerLayer,
+  nodeFileSystemLayer,
+} from "../src/node-platform.ts";
 
 /** One or more scenarios did not pass. */
 class ScenariosFailed extends Data.TaggedError("ScenariosFailed")<{
@@ -162,6 +164,22 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
         "--order",
         "episode[outcome=toolUse]:end,episode[mode=handoff],toolCall:end,episode[mode=handoff]:end",
       ],
+    ],
+  ),
+  scenario(
+    "tool-handoff-parallel",
+    "several tool calls in one message are each answered with their own result",
+    [
+      [...episode(), ...count(2), "--same", "pid"],
+      [...episode("mode=handoff", "outcome=done"), ...count(1)],
+      [...span("toolCall", "outcome=ok"), ...count(2), "--distinct", "tool"],
+      [
+        ...span("toolCall", "outcome=ok"),
+        ...count(2),
+        "--distinct",
+        "toolUseId",
+      ],
+      [...span("ClaudeCli.spawn"), ...count(1)],
     ],
   ),
   scenario(
@@ -736,7 +754,7 @@ const scenariosLayer = Layer.mergeAll(
   nodeFileSystemLayer,
   NodeStdio.layer,
   NodeTerminal.layer,
-  crossSpawnSpawnerLayer,
+  nodeChildProcessSpawnerLayer,
 );
 
 NodeRuntime.runMain(

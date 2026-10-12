@@ -6,6 +6,7 @@ import type {
 } from "./cli-protocol.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 import type {
+  Api,
   AssistantMessage,
   AssistantMessageEventStream,
   Model,
@@ -49,6 +50,9 @@ interface TrackedContentBlock {
   pendingSignature?: string;
 }
 
+/** Index given to a block once its `content_block_stop` has arrived. */
+const STOPPED_BLOCK_INDEX = -1;
+
 /** Extended tracking for tool_use content blocks during streaming. */
 interface TrackedToolBlock {
   type: "tool_use";
@@ -58,7 +62,7 @@ interface TrackedToolBlock {
   contentIndex: number;
   id: string;
   name: string; // Already mapped to pi name
-  arguments: Record<string, unknown>;
+  arguments: ToolCall["arguments"];
   partialJson: string;
 }
 
@@ -89,7 +93,7 @@ export interface EventBridge {
  * that is valid JSON but cannot be a tool's arguments. Passing any of those
  * to pi as arguments fails its schema check.
  */
-function isArgumentObject(value: unknown): value is Record<string, unknown> {
+function isArgumentObject(value: unknown): value is ToolCall["arguments"] {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -119,7 +123,7 @@ function mapStopReason(
  */
 export function createEventBridge(
   stream: AssistantMessageEventStream,
-  model: Model<any>,
+  model: Model<Api>,
 ): EventBridge {
   // Tracked content blocks indexed by Claude's content_block index
   const blocks: TrackedBlock[] = [];
@@ -271,6 +275,15 @@ export function createEventBridge(
       content: text,
       partial: output,
     });
+  }
+
+  /** Show the arguments parsed so far on the streaming partial. */
+  function setToolCallArguments(
+    contentIndex: number,
+    args: ToolCall["arguments"],
+  ): void {
+    const content = output.content[contentIndex];
+    if (content?.type === "toolCall") content.arguments = args;
   }
 
   function handleEvent(event: ClaudeApiEvent): void {
@@ -472,8 +485,7 @@ export function createEventBridge(
         // and be shown to the user as the tool's arguments.
         if (isArgumentObject(parsed)) {
           block.arguments = parsed;
-          (output.content[block.contentIndex] as any).arguments =
-            block.arguments;
+          setToolCallArguments(block.contentIndex, block.arguments);
         }
       } catch {
         // Partial JSON not yet parseable -- keep previous arguments
@@ -518,8 +530,8 @@ export function createEventBridge(
       return;
     }
 
-    // Clean up the tracking index from the block (no longer needed)
-    delete (block as any).index;
+    // A stopped block must not match a later event of the same cycle.
+    block.index = STOPPED_BLOCK_INDEX;
 
     if (block.type === "text") {
       stream.push({
@@ -548,7 +560,7 @@ export function createEventBridge(
       // raw string, on purpose. That text is the only evidence of what
       // actually arrived, and coercing it to {} would turn a visible failure
       // into a tool that silently ran with no arguments.
-      let finalArgs: Record<string, unknown> | string;
+      let finalArgs: ToolCall["arguments"] | string;
       if (block.partialJson.trim() === "") {
         finalArgs = {};
       } else {
@@ -560,17 +572,18 @@ export function createEventBridge(
         }
       }
 
-      (output.content[block.contentIndex] as any).arguments = finalArgs;
-
-      // ToolCall.arguments is typed as Record<string, any> in pi-ai, but we
-      // intentionally emit a raw string when JSON parse fails completely.
-      // Pi handles string arguments gracefully at runtime.
+      // ToolCall.arguments is typed as a JSON object in pi-ai, but a raw
+      // string is emitted on purpose when the arguments did not arrive as
+      // one (see above). pi reports string arguments as a schema failure at
+      // runtime, which is the visible outcome wanted here; this assertion is
+      // the one place that contract is stretched.
       const toolCall = {
         type: "toolCall" as const,
         id: block.id,
         name: block.name,
         arguments: finalArgs,
       } as ToolCall;
+      output.content[block.contentIndex] = toolCall;
 
       stream.push({
         type: "toolcall_end",

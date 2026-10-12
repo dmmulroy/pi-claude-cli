@@ -6,6 +6,7 @@
  * which costs every pi session about 80 ms and 25 MB for nothing.
  */
 
+import * as NodeChildProcessSpawner from "@effect/platform-node-shared/NodeChildProcessSpawner";
 import * as NodeCrypto from "@effect/platform-node-shared/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import * as NodePath from "@effect/platform-node-shared/NodePath";
@@ -19,3 +20,8 @@ export const nodeFileSystemLayer = Layer.mergeAll(
 
 /** Node `Crypto`: random ids. */
 export const nodeCryptoLayer = NodeCrypto.layer;
+
+/** Node `ChildProcessSpawner`: launches the CLI and the scripts' commands. */
+export const nodeChildProcessSpawnerLayer = NodeChildProcessSpawner.layer.pipe(
+  Layer.provide(nodeFileSystemLayer),
+);

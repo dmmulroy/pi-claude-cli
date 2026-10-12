@@ -29,8 +29,10 @@ import {
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { crossSpawnSpawnerLayer } from "../src/cross-spawn-spawner.ts";
-import { nodeFileSystemLayer } from "../src/node-platform.ts";
+import {
+  nodeChildProcessSpawnerLayer,
+  nodeFileSystemLayer,
+} from "../src/node-platform.ts";
 import {
   defaultTraceDirectory,
   resolveTraceTarget,
@@ -777,7 +779,7 @@ const traceCliLayer = Layer.mergeAll(
   nodeFileSystemLayer,
   NodeStdio.layer,
   NodeTerminal.layer,
-  crossSpawnSpawnerLayer,
+  nodeChildProcessSpawnerLayer,
 );
 
 const main = Command.run(traceCommand, { version: "1" }).pipe(

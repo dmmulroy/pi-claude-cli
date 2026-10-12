@@ -14,7 +14,7 @@ In pi's `settings.json`:
 
 Pick a model under `pi-claude-cli` with `/model`.
 
-Requires Node 22+, pi, and an authenticated `claude` binary on PATH (Claude Code 2.1.263+). Subscription credentials stay in the official CLI; no API key extraction. A missing or too-old CLI is reported as an assistant error on the first model call, not at startup.
+Requires macOS or Linux, Node 22+, pi, and an authenticated `claude` binary on PATH (Claude Code 2.1.263+). Windows is not supported. Subscription credentials stay in the official CLI; no API key extraction. A missing or too-old CLI is reported as an assistant error on the first model call, not at startup.
 
 ## One owner: pi
 
@@ -74,6 +74,7 @@ npm run trace -- stats           # count and duration by span name
 - **Rewritten on Effect 4.** Each CLI process is one scope; an episode is one fiber whose exit ends pi's stream exactly once. See [effect-rewrite.md](effect-rewrite.md).
 - **Tools travel in-band.** The schema-only MCP server, its `node` child per CLI process, the unix socket and the shared secret are gone. Each process is told its own tool surface, so a concurrent tool-less request cannot leave the main turn without tools ([upstream #49](https://github.com/agustinsacco/pi-claude-cli/issues/49)).
 - **Traces.** On by default, private, content-free.
+- **No Windows support**, and no `cross-spawn` dependency.
 - **No status-line channels.** The `claude-rate-limit` and `claude-subagents` status keys are gone.
 - **Subscription-override env vars are stripped** from the CLI's environment.
 - **Captured stderr is capped** at the most recent 64 KiB per process.
