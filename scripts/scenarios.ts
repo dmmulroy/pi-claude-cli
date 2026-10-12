@@ -223,11 +223,60 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     [...span("ClaudeProcess.retire", "cause=signature"), ...count(1)],
     [...episode(), ...count(2), "--distinct", "pid"],
   ]),
-  scenario("changed-tools", "a changed tool surface retires the process", [
-    [...episode("mode=spawn", "spawnReason=signature.tools"), ...count(1)],
-    [...span("ClaudeProcess.retire", "cause=signature"), ...count(1)],
-    [...episode(), ...count(2), "--distinct", "pid"],
-  ]),
+  scenario(
+    "changed-tools",
+    "a changed tool surface is applied to the live process",
+    [
+      [
+        ...span(
+          "ClaudeProcess.applyTools",
+          "acknowledged=true",
+          "from=2",
+          "to=1",
+          "midTurn=false",
+        ),
+        ...count(1),
+      ],
+      [...episode("mode=turn", "outcome=done", "tools=1"), ...count(1)],
+      [...span("ClaudeCli.spawn"), ...count(1)],
+      [...episode(), ...count(2), "--same", "pid"],
+    ],
+  ),
+  scenario(
+    "changed-tools-handoff",
+    "tools that change while a tool call is open are applied before its result",
+    [
+      [
+        ...span(
+          "ClaudeProcess.applyTools",
+          "acknowledged=true",
+          "to=3",
+          "midTurn=true",
+        ),
+        ...count(1),
+      ],
+      [...episode("mode=handoff", "outcome=done"), ...count(1)],
+      [...span("ClaudeCli.spawn"), ...count(1)],
+      [...episode(), ...count(2), "--same", "pid"],
+      ["--order", "ClaudeProcess.applyTools:end,toolCall:end"],
+    ],
+  ),
+  scenario(
+    "changed-tools-refused",
+    "a CLI that does not list its tools again is replaced by a fresh process",
+    [
+      [
+        ...span("ClaudeProcess.applyTools", "acknowledged=false"),
+        ...count(1),
+        "--min-ms",
+        "2500",
+      ],
+      [...episode("mode=spawn", "spawnReason=tools"), ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=tools"), ...count(1)],
+      [...episode(), ...count(2), "--distinct", "pid"],
+    ],
+    { env: { CLAUDE_STUB_IGNORE_TOOLS_CHANGED: "1" } },
+  ),
   scenario(
     "foreign-provider",
     "a turn answered by another provider retires the process",
@@ -506,6 +555,47 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       [...episode("mode=turn", "outcome=done"), ...count(1)],
       [...span("toolCall", "outcome=ok"), ...count(1)],
       [...span("ClaudeCli.spawn"), ...count(1)],
+    ],
+    { live: true },
+  ),
+  scenario(
+    "live-parallel-tools",
+    "LIVE: two tool calls in one message, each answered with its own result",
+    [
+      [...episode(), ...count(2), "--same", "pid"],
+      [...episode("mode=spawn", "outcome=toolUse"), ...count(1)],
+      [...episode("mode=handoff", "outcome=done"), ...count(1)],
+      [...span("toolCall", "outcome=ok"), ...count(2), "--distinct", "tool"],
+      [
+        ...span("toolCall", "outcome=ok"),
+        ...count(2),
+        "--distinct",
+        "toolUseId",
+      ],
+      [...span("ClaudeCli.spawn"), ...count(1)],
+    ],
+    { live: true },
+  ),
+  scenario(
+    "live-tools-change",
+    "LIVE: tools added between turns and mid-call, then removed, on one process",
+    [
+      [...episode(), ...count(5), "--same", "pid"],
+      [...span("ClaudeCli.spawn"), ...count(1)],
+      [
+        ...span("ClaudeProcess.applyTools", "acknowledged=true"),
+        ...count(3),
+        "--max-ms",
+        "1000",
+      ],
+      [
+        ...span("ClaudeProcess.applyTools", "midTurn=true", "to=4"),
+        ...count(1),
+      ],
+      [...span("ClaudeProcess.applyTools", "from=4", "to=3"), ...count(1)],
+      [...span("toolCall", "outcome=ok"), ...count(2), "--distinct", "tool"],
+      [...episode("mode=handoff"), ...count(2)],
+      [...episode("mode=turn"), ...count(2)],
     ],
     { live: true },
   ),

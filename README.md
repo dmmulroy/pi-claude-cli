@@ -14,7 +14,7 @@ In pi's `settings.json`:
 
 Pick a model under `pi-claude-cli` with `/model`.
 
-Requires macOS or Linux, Node 22+, pi, and an authenticated `claude` binary on PATH (Claude Code 2.1.263+). Windows is not supported. Subscription credentials stay in the official CLI; no API key extraction. A missing or too-old CLI is reported as an assistant error on the first model call, not at startup.
+Requires macOS or Linux, Node 22+, pi, and an authenticated `claude` binary on PATH (Claude Code 2.1.265+). Windows is not supported. Subscription credentials stay in the official CLI; no API key extraction. A missing or too-old CLI is reported as an assistant error on the first model call, not at startup.
 
 ## One owner: pi
 
@@ -52,6 +52,8 @@ No environment variables are required.
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are never forwarded to the CLI: any of them would move it off the subscription login. A value that does not parse falls back to its default.
 
 pi's thinking levels reach the model as the request pi's own Anthropic provider would send: `off` disables thinking, other levels send pi's budget or effort with thinking summaries. A level changed mid-session applies from the next turn without restarting the CLI.
+
+A changed tool list also reaches the live process: the in-band MCP server tells the CLI its tools changed, the CLI lists them again, and the model is offered the new list from its next request, including the one that follows an open tool call.
 
 ## Traces
 

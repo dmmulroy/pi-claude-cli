@@ -12,15 +12,14 @@ import { Option } from "effect";
 
 /**
  * Everything a process was launched with that a later call cannot change in
- * place. Thinking is deliberately absent: a live process takes a new level
- * through control requests.
+ * place. Thinking and the tool surface are deliberately absent: a live
+ * process takes a new level through control requests and new tools through
+ * the in-band MCP server's `tools/list_changed`.
  */
 export interface LaunchSignature {
   readonly model: string;
   readonly prompt: string;
   readonly cwd: string;
-  /** The tool surface, as the JSON the in-band MCP server lists. */
-  readonly tools: string;
   readonly handoff: boolean;
   readonly settings: string;
 }
@@ -47,6 +46,8 @@ export type SpawnReason =
   | "handoffMismatch"
   /** The process refused the thinking change. */
   | "thinking"
+  /** The process did not list its tools again after a tool change. */
+  | "tools"
   | `signature.${keyof LaunchSignature}`;
 
 /** How an episode gets its process. */
@@ -106,7 +107,6 @@ const SIGNATURE_KEYS = [
   "model",
   "prompt",
   "cwd",
-  "tools",
   "handoff",
   "settings",
 ] as const satisfies ReadonlyArray<keyof LaunchSignature>;
@@ -118,7 +118,10 @@ export const firstSignatureDifference = (
 ): Option.Option<keyof LaunchSignature> =>
   Option.fromUndefinedOr(SIGNATURE_KEYS.find((key) => a[key] !== b[key]));
 
-/** Decide how the call is served. Thinking is applied afterwards, on `turn`. */
+/**
+ * Decide how the call is served. Tools are applied afterwards, on `turn`
+ * and `handoff`, and thinking on `turn`.
+ */
 export const decideEpisodeMode = (
   parked: Option.Option<ParkedProcessFacts>,
   request: EpisodeRequestFacts,

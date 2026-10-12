@@ -35,6 +35,9 @@ export const INBAND_MCP_CONFIG_JSON = JSON.stringify({
   },
 });
 
+/** Tells the CLI's MCP client to ask for `tools/list` again. */
+export const MCP_TOOLS_CHANGED_METHOD = "notifications/tools/list_changed";
+
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 const JSON_RPC_METHOD_NOT_FOUND = -32601;
 
@@ -95,6 +98,8 @@ export const mcpToolResultFromPi = (
 /** What the server does with one message from the CLI's MCP client. */
 export type McpServerAction =
   | { readonly _tag: "Respond"; readonly response: McpResponse }
+  /** A `tools/list`: answered with the tools the process is serving now. */
+  | { readonly _tag: "ListTools"; readonly response: McpResponse }
   /** A notification: acknowledged on the control channel, nothing else. */
   | { readonly _tag: "Acknowledge" }
   /** A `tools/call`: answered once pi has run the tool. */
@@ -128,14 +133,14 @@ export const mcpServerAction = (
           id,
           result: {
             protocolVersion: MCP_PROTOCOL_VERSION,
-            capabilities: { tools: {} },
+            capabilities: { tools: { listChanged: true } },
             serverInfo: { name: INBAND_MCP_SERVER_NAME, version: "1.0.0" },
           },
         },
       };
     case "tools/list":
       return {
-        _tag: "Respond",
+        _tag: "ListTools",
         response: { jsonrpc: "2.0", id, result: { tools } },
       };
     case "tools/call":

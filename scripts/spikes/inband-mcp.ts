@@ -10,6 +10,8 @@
  *   node scripts/spikes/inband-mcp.ts round-trip     # 2 turns: held call, interrupt
  *   node scripts/spikes/inband-mcp.ts timeout        # 1 turn, MCP_TOOL_TIMEOUT=2000
  *   node scripts/spikes/inband-mcp.ts list-changed   # 2 turns: new tool mid-session
+ *   node scripts/spikes/inband-mcp.ts list-changed-mid-call  # 1 turn: new tool during a call
+ *   node scripts/spikes/inband-mcp.ts list-removed   # 2 turns: a tool taken away
  *   node scripts/spikes/inband-mcp.ts probe --claude /path/to/older/claude
  *
  * Every mode but `probe` spends subscription tokens (haiku, tiny prompts).
@@ -399,6 +401,13 @@ const modes = {
       yield* probe.notifyToolsChanged;
       yield* Effect.sleep("2 seconds");
       yield* probe.control("spike-status-2", { subtype: "mcp_status" });
+      // A removal travels the same way as an addition.
+      yield* Ref.update(probe.tools, (tools) =>
+        tools.filter((tool) => tool.name !== "probe_tool"),
+      );
+      yield* probe.notifyToolsChanged;
+      yield* Effect.sleep("2 seconds");
+      yield* probe.control("spike-status-3", { subtype: "mcp_status" });
     }),
 
   /** A call held open while "pi runs the tool", then an interrupt mid-call. */
@@ -464,12 +473,90 @@ const modes = {
       yield* probe.answerToolCall(outcome.value, "second-value-7");
       yield* probe.nextResult;
     }),
+
+  /** Is a tool removed mid-session gone from what the model is offered? */
+  "list-removed": (probe) =>
+    Effect.gen(function* () {
+      yield* Effect.sleep("2 seconds");
+      yield* Ref.update(probe.tools, (tools) => [
+        ...tools,
+        probeTool("second_tool", "Returns the second value."),
+      ]);
+      yield* probe.notifyToolsChanged;
+      yield* Effect.sleep("1 second");
+      yield* probe.user("Call the second_tool.");
+      yield* probe.answerToolCall(yield* probe.nextToolCall, "second-value-7");
+      yield* probe.nextResult;
+
+      yield* Ref.update(probe.tools, (tools) =>
+        tools.filter((tool) => tool.name !== "second_tool"),
+      );
+      yield* probe.notifyToolsChanged;
+      yield* Effect.sleep("1 second");
+      // The `system init` line of this turn lists what the model is offered.
+      yield* probe.user(
+        "Call the second_tool again. If you have no tool by that name, reply NO-SUCH-TOOL.",
+      );
+      const outcome = yield* Effect.raceFirst(
+        Effect.map(probe.nextToolCall, (call) => Option.some(call)),
+        Effect.as(probe.nextResult, Option.none<OpenToolCall>()),
+      );
+      if (Option.isNone(outcome))
+        return yield* probe.log(
+          "FINDING: no tools/call for the removed tool reached the server",
+        );
+      yield* probe.log(
+        `FINDING: the CLI still called the removed ${outcome.value.toolName}`,
+      );
+      yield* probe.answerToolCall(outcome.value, "second-value-7");
+      yield* probe.nextResult;
+    }),
+
+  /**
+   * Does a tool added while a `tools/call` is open reach the model in the
+   * same turn, on the model request that follows the tool result?
+   */
+  "list-changed-mid-call": (probe) =>
+    Effect.gen(function* () {
+      yield* Effect.sleep("2 seconds");
+      yield* probe.user(
+        "Call the probe_tool. After its result, call the second_tool; if you then have no tool by that name, reply NO-SUCH-TOOL.",
+      );
+      const first = yield* probe.nextToolCall;
+      yield* Ref.update(probe.tools, (tools) => [
+        ...tools,
+        probeTool("second_tool", "Returns the second value."),
+      ]);
+      yield* probe.notifyToolsChanged;
+      yield* Effect.sleep("1 second");
+      yield* probe.answerToolCall(first, "probe-value-42");
+      const outcome = yield* Effect.raceFirst(
+        Effect.map(probe.nextToolCall, (call) => Option.some(call)),
+        Effect.as(probe.nextResult, Option.none<OpenToolCall>()),
+      );
+      if (Option.isNone(outcome))
+        return yield* probe.log(
+          "FINDING: the turn ended without a second_tool call",
+        );
+      yield* probe.log(
+        `FINDING: the model called ${outcome.value.toolName} in the same turn`,
+      );
+      yield* probe.answerToolCall(outcome.value, "second-value-7");
+      yield* probe.nextResult;
+    }),
 } satisfies Record<
   string,
   (probe: Effect.Success<ReturnType<typeof launchProbe>>) => Effect.Effect<void>
 >;
 
-const MODE_NAMES = ["probe", "round-trip", "timeout", "list-changed"] as const;
+const MODE_NAMES = [
+  "probe",
+  "round-trip",
+  "timeout",
+  "list-changed",
+  "list-changed-mid-call",
+  "list-removed",
+] as const;
 
 const spikeCommand = Command.make(
   "inband-mcp",

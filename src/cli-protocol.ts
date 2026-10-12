@@ -371,6 +371,26 @@ export const mcpResponseLine = (
   });
 
 /**
+ * A notification from the in-band MCP server to the CLI's MCP client. It
+ * travels the other way round from everything else the server sends: as a
+ * control request of ours, which the CLI acknowledges with a control response.
+ */
+export const mcpServerNotificationLine = (
+  requestId: string,
+  serverName: string,
+  method: string,
+): string =>
+  line({
+    type: "control_request",
+    request_id: requestId,
+    request: {
+      subtype: "mcp_message",
+      server_name: serverName,
+      message: { jsonrpc: "2.0", method },
+    },
+  });
+
+/**
  * The acknowledgement of an in-band MCP notification. The CLI's control
  * channel wants a response for every request, so a notification gets an
  * empty result.

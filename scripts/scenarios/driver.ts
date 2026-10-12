@@ -226,6 +226,44 @@ const toolRoundTrip = (session: ScenarioSession) =>
     return yield* session.call();
   });
 
+/** What the CLI was told its tools are, one entry per `tools/list`. */
+const expectToolLists = (expected: ReadonlyArray<ReadonlyArray<string>>) =>
+  Effect.gen(function* () {
+    const listed = (yield* readStubFile("tools.jsonl")).trim();
+    const wanted = expected.map((names) => JSON.stringify(names)).join("\n");
+    yield* expect(
+      listed === wanted,
+      `expected the CLI to list its tools as ${wanted}, got ${listed}`,
+    );
+  });
+
+/** A turn, a different tool list, another turn. */
+const changedToolsBetweenTurns = (session: ScenarioSession) =>
+  Effect.gen(function* () {
+    yield* session.say("hello");
+    yield* session.update((current) => ({ ...current, tools: [tool("read")] }));
+    yield* expectDone(yield* session.say("again"), "PORT-OK");
+    // The same two lists whether one process listed twice or two listed once.
+    yield* expectToolLists([["read", "bash"], ["read"]]);
+  });
+
+const toolCallNames = (message: AssistantMessage): ReadonlyArray<string> =>
+  message.content.flatMap((block) =>
+    block.type === "toolCall" ? [block.name] : [],
+  );
+
+const expectToolCalls = (
+  answer: AssistantMessage,
+  names: ReadonlyArray<string>,
+) =>
+  expect(
+    answer.stopReason === "toolUse" &&
+      [...toolCallNames(answer)].sort().join() === [...names].sort().join(),
+    `expected one message calling ${names.join(" and ")}, got ${answer.stopReason}: ${
+      toolCallNames(answer).join() || (answer.errorMessage ?? textOf(answer))
+    }`,
+  );
+
 const scenarios: Record<
   string,
   (
@@ -249,11 +287,7 @@ const scenarios: Record<
         yield* toolRoundTrip(session),
         "TOOL-DONE FILE-CONTENT",
       );
-      const tools = yield* readStubFile("tools.jsonl");
-      yield* expect(
-        tools.trim() === JSON.stringify(["read", "bash"]),
-        `expected the CLI to be offered exactly pi's tools, got ${tools}`,
-      );
+      yield* expectToolLists([["read", "bash"]]);
     }),
 
   "tool-handoff-parallel": (session) =>
@@ -318,14 +352,23 @@ const scenarios: Record<
       yield* expectDone(yield* session.say("again"), "PORT-OK");
     }),
 
-  "changed-tools": (session) =>
+  "changed-tools": (session) => changedToolsBetweenTurns(session),
+  "changed-tools-refused": (session) => changedToolsBetweenTurns(session),
+
+  "changed-tools-handoff": (session) =>
     Effect.gen(function* () {
-      yield* session.say("hello");
+      yield* session.say("please tool:read");
+      // pi's tool run changed the active tools before its result came back.
       yield* session.update((current) => ({
         ...current,
-        tools: [tool("read")],
+        tools: [...current.tools, tool("grep")],
       }));
-      yield* expectDone(yield* session.say("again"), "PORT-OK");
+      yield* session.answerToolCalls("FILE-CONTENT");
+      yield* expectDone(yield* session.call(), "TOOL-DONE FILE-CONTENT");
+      yield* expectToolLists([
+        ["read", "bash"],
+        ["read", "bash", "grep"],
+      ]);
     }),
 
   "foreign-provider": (session) =>
@@ -509,6 +552,61 @@ const scenarios: Record<
       yield* expectDone(
         yield* session.say("Answer with the single word OK."),
         "",
+      );
+    }),
+
+  "live-parallel-tools": (session) =>
+    Effect.gen(function* () {
+      const asked = yield* session.say(
+        'In one response, call both tools in parallel: read with path "a.txt" and bash with path "b.txt". Do not wait for one result before making the other call. After both results, reply with exactly: read=<the read result> bash=<the bash result>',
+      );
+      yield* expectToolCalls(asked, ["read", "bash"]);
+      // Distinct results: each must reach the call that asked for it.
+      yield* session.answerToolCalls((toolName) =>
+        toolName === "read" ? "ALPHA-17" : "BRAVO-42",
+      );
+      const answer = yield* session.call();
+      yield* expectDone(answer, "read=ALPHA-17");
+      yield* expectDone(answer, "bash=BRAVO-42");
+    }),
+
+  "live-tools-change": (session) =>
+    Effect.gen(function* () {
+      yield* expectDone(
+        yield* session.say("Answer with the single word OK."),
+        "",
+      );
+      // A tool added between turns.
+      yield* session.update((current) => ({
+        ...current,
+        tools: [...current.tools, tool("lookup")],
+      }));
+      yield* expectToolCalls(
+        yield* session.say(
+          'Call the lookup tool with path "x". A tool named fetch becomes available once lookup has returned: call it then with path "y", or answer NO-SUCH-TOOL if you still have no such tool. After the fetch result, answer with the single word DONE.',
+        ),
+        ["lookup"],
+      );
+      // A tool added while the lookup call is open.
+      yield* session.update((current) => ({
+        ...current,
+        tools: [...current.tools, tool("fetch")],
+      }));
+      yield* session.answerToolCalls("lookup-result");
+      yield* expectToolCalls(yield* session.call(), ["fetch"]);
+      yield* session.answerToolCalls("fetch-result");
+      yield* expectDone(yield* session.call(), "DONE");
+      // A tool removed between turns. Only that the process takes the change
+      // is checked here: a model asked about a tool it has just used answers
+      // from the conversation, not from its tool definitions. What the CLI
+      // offers after a removal is the spike's to show (`list-removed`).
+      yield* session.update((current) => ({
+        ...current,
+        tools: current.tools.filter((each) => each.name !== "fetch"),
+      }));
+      yield* expectDone(
+        yield* session.say("Answer with the single word OK."),
+        "OK",
       );
     }),
 

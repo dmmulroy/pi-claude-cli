@@ -104,7 +104,7 @@ type TurnEnd =
   | { readonly _tag: "TurnEnded"; readonly interrupted: boolean };
 
 const retireCauseForSpawn = (reason: SpawnReason): RetireCause => {
-  if (reason === "thinking") return "thinking";
+  if (reason === "thinking" || reason === "tools") return reason;
   return reason.startsWith("signature.") ? "signature" : "history";
 };
 
@@ -180,7 +180,6 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     model: model.id,
     prompt: request.systemPrompt,
     cwd,
-    tools: JSON.stringify(tools),
     handoff: allowHandoff,
     settings: Option.getOrElse(config.settingsPath, () => ""),
   };
@@ -226,6 +225,15 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
         historyHashOfPrefix: (length) => historyHash(messages.slice(0, length)),
       });
     }
+    // pi owns the active tools: the process offers the model this call's
+    // tools from its next request on, which on a handoff is the one that
+    // follows the tool results.
+    if (
+      decision.mode !== "spawn" &&
+      Option.isSome(parked) &&
+      !(yield* parked.value.applyTools(tools))
+    )
+      decision = { mode: "spawn", reason: "tools" };
     // A new user turn runs at the level pi asks for now. A handoff keeps the
     // turn it is continuing: the CLI reads thinking once per user turn.
     if (

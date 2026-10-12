@@ -46,7 +46,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - `src/claude-process-pool.ts`: launches processes and parks one per pi session. Its scope is the parent of every process scope.
 - `src/claude-process.ts`: one CLI process and everything it owns, in one scope. The stdout reader answers permission and MCP requests whether or not an episode is attached. `retire` closes the scope.
 - `src/claude-cli.ts`: launch flags and environment, over Effect's Node `ChildProcessSpawner`. Replaces Claude Code's prompt, disables native tools and session persistence, preserves explicit host guards and OAuth. Never use `--bare`.
-- `src/mcp-inband.ts`: the in-band (`"type": "sdk"`) MCP server that advertises pi's tools on the CLI's own control channel. No socket, no helper process, no secret. A `tools/call` is held open until pi's next call delivers the result, matched on the actual tool-use id and name.
+- `src/mcp-inband.ts`: the in-band (`"type": "sdk"`) MCP server that advertises pi's tools on the CLI's own control channel. No socket, no helper process, no secret. A `tools/call` is held open until pi's next call delivers the result, matched on the actual tool-use id and name. A changed tool list is announced with `notifications/tools/list_changed` and confirmed by the CLI's next `tools/list`.
 - `src/cli-protocol.ts`: lenient `Schema` decoding of the CLI's NDJSON; builders for stdin lines.
 - `src/event-bridge.ts`: convert CLI stream events to pi messages. Content indexes restart each model cycle, so blocks are tracked by `(cycle, index)`.
 - `src/pi-context.ts`: normalize old/new pi context formats, import ordered messages and images, hash acknowledged history.
@@ -57,7 +57,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 ## Invariants
 
 1. pi owns the prompt, active tools, complete tool results and compaction. A Claude process is a disposable cache of pi's history, never a second conversation ledger.
-2. A warm process may continue only when its acknowledged pi-history prefix and launch signature match. Anything else retires it and imports pi's current history into a fresh process.
+2. A warm process may continue only when its acknowledged pi-history prefix and launch signature match. Anything else retires it and imports pi's current history into a fresh process. Thinking and the tool list are not in the signature: they are applied to the live process (`applyThinking`, `applyTools`), and only a change the CLI does not take retires it.
 3. Tool calls reach pi as real toolCall blocks; the CLI waits for the matching pi result. The CLI has no native tools.
 4. Nothing is written to pi's status line or to conversation content except the model's own output. Effect's console logger is replaced: logs are span events.
 5. CLI sessions do not persist. No transcript, no resume. Trace files are not a transcript: they hold ids, names, sizes, counts and durations, never prompt text, tool arguments or tool results (unless `PI_CLAUDE_CLI_TRACE_WIRE=raw` is set on purpose).

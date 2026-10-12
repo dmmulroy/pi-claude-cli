@@ -28,6 +28,9 @@
  *                           the provider controls
  *   CLAUDE_STUB_TOOLS_FILE  append the tool names the MCP server listed
  *   CLAUDE_STUB_REFUSE_CONTROL=1  refuse thinking control requests
+ *   CLAUDE_STUB_IGNORE_TOOLS_CHANGED=1  acknowledge a tools/list_changed
+ *                           notification without listing the tools again,
+ *                           as Claude Code 2.1.263 does
  */
 const fs = require("node:fs");
 
@@ -116,23 +119,30 @@ const askPermission = (toolName, toolUseId, input) =>
     });
   });
 
+/** Ask the in-band server for its tools, as at start and after a change. */
+const listTools = async () => {
+  const listed = await mcp("tools/list");
+  if (process.env.CLAUDE_STUB_TOOLS_FILE) {
+    fs.appendFileSync(
+      process.env.CLAUDE_STUB_TOOLS_FILE,
+      JSON.stringify(
+        (listed.response?.result?.tools ?? []).map((tool) => tool.name),
+      ) + "\n",
+    );
+  }
+};
+
+/** MCP startup; like the real CLI, no turn starts before its tools are listed. */
+let mcpReady = Promise.resolve();
 if (sdkServer) {
-  (async () => {
+  mcpReady = (async () => {
     await mcp("initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
       clientInfo: { name: "claude-stub", version: "9.9.9" },
     });
     await mcp("notifications/initialized", undefined, true);
-    const listed = await mcp("tools/list");
-    if (process.env.CLAUDE_STUB_TOOLS_FILE) {
-      fs.appendFileSync(
-        process.env.CLAUDE_STUB_TOOLS_FILE,
-        JSON.stringify(
-          (listed.response?.result?.tools ?? []).map((tool) => tool.name),
-        ) + "\n",
-      );
-    }
+    await listTools();
   })();
 }
 
@@ -335,6 +345,19 @@ const handleLine = (line) => {
       }
       return;
     }
+    if (msg.request?.subtype === "mcp_message") {
+      // A notification from the in-band server: acknowledged, then acted on.
+      emit({
+        type: "control_response",
+        response: { subtype: "success", request_id: msg.request_id },
+      });
+      if (
+        msg.request.message?.method === "notifications/tools/list_changed" &&
+        process.env.CLAUDE_STUB_IGNORE_TOOLS_CHANGED !== "1"
+      )
+        listTools();
+      return;
+    }
     // Thinking changes on a live process: acknowledge, as the CLI does.
     emit({
       type: "control_response",
@@ -349,7 +372,7 @@ const handleLine = (line) => {
     });
     return;
   }
-  if (msg.type === "user") startTurn(userText(msg));
+  if (msg.type === "user") mcpReady.then(() => startTurn(userText(msg)));
 };
 
 let buf = "";

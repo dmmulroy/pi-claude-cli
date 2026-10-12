@@ -41,6 +41,7 @@ import {
   type JsonRpcId,
   mcpNotificationAckLine,
   mcpResponseLine,
+  mcpServerNotificationLine,
   toolPermissionResponseLine,
   userMessageLine,
 } from "./cli-protocol.ts";
@@ -48,6 +49,7 @@ import type { HistoryCheckpoint, LaunchSignature } from "./episode-mode.ts";
 import { ProcessExited, ProcessGone } from "./errors.ts";
 import {
   INBAND_MCP_SERVER_NAME,
+  MCP_TOOLS_CHANGED_METHOD,
   type McpToolDefinition,
   type McpToolResult,
   mcpServerAction,
@@ -67,12 +69,14 @@ import { type TokenUsage, ZERO_TOKEN_USAGE } from "./usage.ts";
 export type RetireCause =
   /** Parked and nobody came back within the idle time. */
   | "idle"
-  /** The next call's model, prompt, tools or launch settings differ. */
+  /** The next call's model, prompt or launch settings differ. */
   | "signature"
   /** pi's history is not the one the process acknowledged. */
   | "history"
   /** The process refused a thinking change. */
   | "thinking"
+  /** The process did not list its tools again after a tool change. */
+  | "tools"
   /** The episode it was serving failed. */
   | "failure"
   /** It stopped writing to stdout; killed without a grace period. */
@@ -101,7 +105,7 @@ export interface ClaudeProcessLaunch {
   readonly signature: LaunchSignature;
   /** True holds a tool call open for pi; false denies it so the turn can be interrupted. */
   readonly allowHandoff: boolean;
-  /** pi's tools, as the in-band MCP server lists them. */
+  /** pi's tools at launch, as the in-band MCP server lists them. */
   readonly tools: ReadonlyArray<McpToolDefinition>;
   /**
    * Record every stdout line on the process span, content included. Protocol
@@ -145,6 +149,14 @@ export interface IClaudeProcess {
    * means it cannot take the change in place; the caller spawns instead.
    */
   readonly applyThinking: (desired: CliThinking) => Effect.Effect<boolean>;
+  /**
+   * Make `desired` the tools the model is offered from its next request on,
+   * mid-turn included. False means the CLI did not ask for the new list; the
+   * caller spawns instead.
+   */
+  readonly applyTools: (
+    desired: ReadonlyArray<McpToolDefinition>,
+  ) => Effect.Effect<boolean>;
   /** True when pi's results for exactly these tool calls can continue the turn. */
   readonly awaitsToolCalls: (
     toolUseIds: ReadonlyArray<string>,
@@ -168,8 +180,14 @@ const STDERR_TAIL_LIMIT_CHARS = 64 * 1024;
 const INTERRUPT_GRACE = Duration.seconds(2);
 /** Grace after closing stdin before a still-running CLI is killed. */
 const EXIT_GRACE = Duration.millis(500);
-/** How long a thinking change may take to be acknowledged. */
-const THINKING_CONTROL_TIMEOUT = Duration.seconds(5);
+/** How long a control request of ours may take to be acknowledged. */
+const CONTROL_TIMEOUT = Duration.seconds(5);
+/**
+ * How long the CLI may take to ask for `tools/list` after being told the
+ * tools changed. It asks within milliseconds or, on a CLI that ignores the
+ * notification, never.
+ */
+const TOOLS_RELIST_TIMEOUT = Duration.seconds(3);
 /** How long stdout EOF waits for the exit code and the last of stderr. */
 const EXIT_REPORT_GRACE = Duration.millis(500);
 
@@ -221,6 +239,9 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   const turnActive = yield* Ref.make(false);
   const turnEnded = yield* Ref.make(yield* Deferred.make<void>());
   const thinking = yield* Ref.make(launch.thinking);
+  const tools = yield* Ref.make(launch.tools);
+  /** Completed by the next `tools/list` the CLI sends. */
+  const toolsRelisted = yield* Ref.make(Option.none<Deferred.Deferred<void>>());
   const stderrTail = yield* Ref.make("");
   const expected = yield* Ref.make(HashMap.empty<string, ExpectedToolCall>());
   const openCalls = yield* Ref.make(
@@ -331,9 +352,18 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   ) {
     const action = mcpServerAction(
       message.message,
-      message.serverName === INBAND_MCP_SERVER_NAME ? launch.tools : [],
+      message.serverName === INBAND_MCP_SERVER_NAME
+        ? yield* Ref.get(tools)
+        : [],
     );
     switch (action._tag) {
+      case "ListTools": {
+        yield* write(mcpResponseLine(message.requestId, action.response));
+        const waiting = yield* Ref.getAndSet(toolsRelisted, Option.none());
+        if (Option.isSome(waiting))
+          yield* Deferred.succeed(waiting.value, undefined);
+        return;
+      }
       case "Respond":
         return yield* write(
           mcpResponseLine(message.requestId, action.response),
@@ -517,17 +547,66 @@ const startClaudeProcess = Effect.fnUntraced(function* (
 
   // ---- turns ---------------------------------------------------------------
 
-  const sendControl = Effect.fnUntraced(function* (request: ThinkingControl) {
-    if (!(yield* Ref.get(alive)) || (yield* Ref.get(turnActive))) return false;
+  /** Write a control request and wait for the CLI to acknowledge it. */
+  const requestControl = Effect.fnUntraced(function* (
+    lineFor: (requestId: string) => string,
+  ) {
+    if (!(yield* Ref.get(alive))) return false;
     const requestId = `pcc-${yield* Ref.updateAndGet(controlSequence, (n) => n + 1)}`;
     const acknowledged = yield* Deferred.make<boolean>();
     yield* Ref.update(controlWaiters, HashMap.set(requestId, acknowledged));
-    yield* write(controlRequestLine(requestId, request));
+    yield* write(lineFor(requestId));
     return yield* Deferred.await(acknowledged).pipe(
-      Effect.timeoutOption(THINKING_CONTROL_TIMEOUT),
+      Effect.timeoutOption(CONTROL_TIMEOUT),
       Effect.map(Option.getOrElse(() => false)),
       Effect.ensuring(Ref.update(controlWaiters, HashMap.remove(requestId))),
     );
+  });
+
+  /** The CLI reads thinking once per user turn, so never during one. */
+  const sendThinkingControl = Effect.fnUntraced(function* (
+    request: ThinkingControl,
+  ) {
+    if (yield* Ref.get(turnActive)) return false;
+    return yield* requestControl((requestId) =>
+      controlRequestLine(requestId, request),
+    );
+  });
+
+  /**
+   * Serve `desired` from now on and tell the CLI its tools changed. The
+   * change has landed only once the CLI has asked for the list again: an
+   * acknowledged notification alone proves nothing (Claude Code 2.1.263
+   * acknowledges it and keeps the old tools).
+   */
+  const changeTools = Effect.fn("ClaudeProcess.applyTools")(function* (
+    desired: ReadonlyArray<McpToolDefinition>,
+  ) {
+    yield* Effect.annotateCurrentSpan({
+      pid,
+      from: (yield* Ref.get(tools)).length,
+      to: desired.length,
+      midTurn: yield* Ref.get(turnActive),
+    });
+    const relisted = yield* Deferred.make<void>();
+    yield* Ref.set(tools, desired);
+    yield* Ref.set(toolsRelisted, Option.some(relisted));
+    const acknowledged =
+      (yield* requestControl((requestId) =>
+        mcpServerNotificationLine(
+          requestId,
+          INBAND_MCP_SERVER_NAME,
+          MCP_TOOLS_CHANGED_METHOD,
+        ),
+      )) &&
+      (yield* Deferred.await(relisted).pipe(
+        Effect.as(true),
+        Effect.timeoutOption(TOOLS_RELIST_TIMEOUT),
+        Effect.map(Option.getOrElse(() => false)),
+      ));
+    yield* Ref.set(toolsRelisted, Option.none());
+    yield* Effect.annotateCurrentSpan({ acknowledged });
+    return acknowledged;
   });
 
   const idleTimer = yield* FiberHandle.make<void>();
@@ -571,7 +650,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
       const controls = thinkingControls(applied, desired);
       let acknowledged = controls !== undefined;
       for (const control of controls ?? []) {
-        acknowledged = yield* sendControl(control);
+        acknowledged = yield* sendThinkingControl(control);
         if (!acknowledged) break;
       }
       if (acknowledged) yield* Ref.set(thinking, desired);
@@ -581,6 +660,13 @@ const startClaudeProcess = Effect.fnUntraced(function* (
       });
       return acknowledged;
     }),
+    applyTools: (desired) =>
+      Effect.gen(function* () {
+        const serving = yield* Ref.get(tools);
+        return JSON.stringify(serving) === JSON.stringify(desired)
+          ? yield* Ref.get(alive)
+          : yield* changeTools(desired);
+      }),
     awaitsToolCalls: (toolUseIds) =>
       Effect.gen(function* () {
         if (!(yield* Ref.get(alive)) || !(yield* Ref.get(turnActive)))

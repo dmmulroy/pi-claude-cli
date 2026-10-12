@@ -9,8 +9,13 @@
 
 import { Option } from "effect";
 
-/** Oldest Claude Code version the launch flags and in-band MCP were tested on. */
-export const MIN_SUPPORTED_CLI_VERSION = "2.1.263";
+/**
+ * Oldest Claude Code version the launch flags and in-band MCP were tested on.
+ * 2.1.263 hosts the in-band server but ignores
+ * `notifications/tools/list_changed`; 2.1.265 is the first that lists the
+ * tools again, which a tool change on a live process depends on.
+ */
+export const MIN_SUPPORTED_CLI_VERSION = "2.1.265";
 
 /** The `major.minor.patch` in `claude --version` output, when there is one. */
 export const parseCliVersion = (versionOutput: string): Option.Option<string> =>

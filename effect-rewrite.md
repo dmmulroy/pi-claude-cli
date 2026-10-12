@@ -91,27 +91,28 @@ node scripts/scenarios.ts --live       # also the live scenario; spends subscrip
 
 Most scenarios run `scripts/scenarios/driver.ts`, which calls the provider runtime's `startEpisode` the way pi does and keeps a pi-style conversation, for sequences print mode cannot express. `print-mode-exit` runs real `pi -p`. The driver also checks what a trace cannot show: the terminal event pi received, the stub's view of its argv and environment, and files on disk.
 
-| Scenario                                                                 | The trace must show                                                                                                            |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| `fresh-spawn`                                                            | `episode` with `mode=spawn`, `outcome=done`; one `ClaudeCli.spawn`; one `park`                                                 |
-| `warm-turn`                                                              | Second `episode` with `mode=turn`; one `ClaudeCli.spawn` in total; same pid                                                    |
-| `tool-handoff`, `tool-handoff-parallel`                                  | `outcome=toolUse`; `park` at the handoff idle time; next `episode` with `mode=handoff`, same pid; `toolCall` ok                |
-| `tool-abandoned`                                                         | A user message instead of the tool result: `spawnReason=handoffMismatch`; `toolCall` interrupted; the blocked process retired  |
-| `handoff-proxy-off`                                                      | `PI_CLAUDE_CLI_HANDOFF_PROXY=0`: no `toolCall`; `retire` with `cause=interrupted`; the tool result is reimported               |
-| `changed-history`, `changed-prompt`, `changed-tools`, `foreign-provider` | `mode=spawn` with the matching `spawnReason`; the old process retired with `cause=history` or `cause=signature`; distinct pids |
-| `thinking-change`, `thinking-refused`                                    | `applyThinking` acknowledged and no spawn; a refusal leads to `spawnReason=thinking`                                           |
-| `abort-mid-stream`, `abort-during-launch`, `already-aborted`             | `episode` interrupted with `outcome=aborted`; `retire` with `cause=abort` ending afterwards; nothing parked; no open spans     |
-| `inactivity-timeout`                                                     | `outcome=error`; `retire` with `cause=timeout`, `ended=killed`                                                                 |
-| `process-dies`, `turn-fails`                                             | `outcome=error` (the driver checks the stderr tail and exit code in the message); nothing parked                               |
-| `idle-expiry`                                                            | `retire` with `cause=idle` at the keepalive (set short through env)                                                            |
-| `no-session`, `lifecycle-retire`                                         | No pi session: served and ended, not parked. A lifecycle event: `retire` with `cause=shutdown`                                 |
-| `session-shutdown`                                                       | `ProviderRuntime.dispose`; no open spans; the driver checks the runtime directory is gone                                      |
-| `layer-build-failure`                                                    | No `episode` span at all; the driver checks both calls end with an `error` event instead of hanging                            |
-| `env-stripping`, `launch-flags`                                          | The stub reports no `ANTHROPIC_*` variables; host `--settings` kept, empty arguments preserved, never `--bare`                 |
-| `wire-counts`, `wire-events`, `wire-raw`                                 | Counts and `ttftMs` by default and no events; `wire <type>` events at `=1`; `wire raw` events on the process at `=raw`         |
-| `trace-sink`, `trace-default-location`                                   | The three statuses and events; the default daily file is `0600` in a `0700` directory, pruned, and found by the CLI            |
-| `print-mode-exit`                                                        | Real `pi -p` loads the provider lazily, parks a process, disposes on `session_shutdown` and exits                              |
-| `live` (spends tokens)                                                   | One turn, one tool call held open, one warm follow-up, all on one pid                                                          |
+| Scenario                                                          | The trace must show                                                                                                                          |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fresh-spawn`                                                     | `episode` with `mode=spawn`, `outcome=done`; one `ClaudeCli.spawn`; one `park`                                                               |
+| `warm-turn`                                                       | Second `episode` with `mode=turn`; one `ClaudeCli.spawn` in total; same pid                                                                  |
+| `tool-handoff`, `tool-handoff-parallel`                           | `outcome=toolUse`; `park` at the handoff idle time; next `episode` with `mode=handoff`, same pid; `toolCall` ok                              |
+| `tool-abandoned`                                                  | A user message instead of the tool result: `spawnReason=handoffMismatch`; `toolCall` interrupted; the blocked process retired                |
+| `handoff-proxy-off`                                               | `PI_CLAUDE_CLI_HANDOFF_PROXY=0`: no `toolCall`; `retire` with `cause=interrupted`; the tool result is reimported                             |
+| `changed-history`, `changed-prompt`, `foreign-provider`           | `mode=spawn` with the matching `spawnReason`; the old process retired with `cause=history` or `cause=signature`; distinct pids               |
+| `changed-tools`, `changed-tools-handoff`, `changed-tools-refused` | `applyTools` acknowledged and no spawn, between turns and with a tool call open; a CLI that does not list again leads to `spawnReason=tools` |
+| `thinking-change`, `thinking-refused`                             | `applyThinking` acknowledged and no spawn; a refusal leads to `spawnReason=thinking`                                                         |
+| `abort-mid-stream`, `abort-during-launch`, `already-aborted`      | `episode` interrupted with `outcome=aborted`; `retire` with `cause=abort` ending afterwards; nothing parked; no open spans                   |
+| `inactivity-timeout`                                              | `outcome=error`; `retire` with `cause=timeout`, `ended=killed`                                                                               |
+| `process-dies`, `turn-fails`                                      | `outcome=error` (the driver checks the stderr tail and exit code in the message); nothing parked                                             |
+| `idle-expiry`                                                     | `retire` with `cause=idle` at the keepalive (set short through env)                                                                          |
+| `no-session`, `lifecycle-retire`                                  | No pi session: served and ended, not parked. A lifecycle event: `retire` with `cause=shutdown`                                               |
+| `session-shutdown`                                                | `ProviderRuntime.dispose`; no open spans; the driver checks the runtime directory is gone                                                    |
+| `layer-build-failure`                                             | No `episode` span at all; the driver checks both calls end with an `error` event instead of hanging                                          |
+| `env-stripping`, `launch-flags`                                   | The stub reports no `ANTHROPIC_*` variables; host `--settings` kept, empty arguments preserved, never `--bare`                               |
+| `wire-counts`, `wire-events`, `wire-raw`                          | Counts and `ttftMs` by default and no events; `wire <type>` events at `=1`; `wire raw` events on the process at `=raw`                       |
+| `trace-sink`, `trace-default-location`                            | The three statuses and events; the default daily file is `0600` in a `0700` directory, pruned, and found by the CLI                          |
+| `print-mode-exit`                                                 | Real `pi -p` loads the provider lazily, parks a process, disposes on `session_shutdown` and exits                                            |
+| `live` (spends tokens)                                            | One turn, one tool call held open, one warm follow-up, all on one pid                                                                        |
 
 Every scenario also asserts `--no-open`.
 
@@ -127,7 +128,7 @@ What this means for the test suite:
 
 Before the rewrite a tool call left the CLI through `mcp-schema-server.cjs`, a unix socket, a shared secret and a handoff broker. Claude Code can instead host an MCP server in-band over the stdio control channel (`"type": "sdk"`, the Agent SDK's mechanism). The spike settled it: **the in-band route is taken and the socket bridge is gone.**
 
-The spike is kept as `scripts/spikes/inband-mcp.ts` so it can be repeated against a new Claude Code version (`probe` spends no tokens; `round-trip`, `timeout` and `list-changed` run one or two haiku turns; `--claude <path>` probes another binary).
+The spike is kept as `scripts/spikes/inband-mcp.ts` so it can be repeated against a new Claude Code version (`probe` spends no tokens; `round-trip`, `timeout`, `list-changed`, `list-changed-mid-call` and `list-removed` run one or two haiku turns; `--claude <path>` probes another binary).
 
 Spike results, on 2.1.292 and repeated on the 2.1.263 floor:
 
@@ -137,7 +138,9 @@ Spike results, on 2.1.292 and repeated on the 2.1.263 floor:
 4. **The call has a timeout and `MCP_TOOL_TIMEOUT` governs it.** At `2000` the CLI told the model the tool timed out after 2 s and sent `notifications/cancelled {reason: "SdkError: Request timed out"}`. The provider keeps setting it to one hour.
 5. **The floor behaves the same.** 2.1.263 lists the tools at start and completes the round trip.
 6. **The `initialize` control request is not required.** Without it the CLI still sends MCP `initialize`, `notifications/initialized` and `tools/list` within half a second of launch.
-7. **`mcp_set_servers` with the same server is a no-op** (`{added: [], removed: []}`). An MCP `notifications/tools/list_changed` sent as an `mcp_message` is the way to change the surface, **on 2.1.292 only**: the CLI asks for `tools/list` again within milliseconds, and on the next turn the model was offered and called the new tool on the live process. On the 2.1.263 floor the notification is acknowledged and nothing is re-listed. A changed tool surface therefore still retires the process; see "Status and next steps".
+7. **`mcp_set_servers` with the same server is a no-op** (`{added: [], removed: []}`). An MCP `notifications/tools/list_changed` sent as an `mcp_message` is the way to change the surface: the CLI asks for `tools/list` again within milliseconds, and on the next turn the model was offered and called the new tool on the live process. 2.1.263 acknowledges the notification and lists nothing; a no-token `probe` of nine versions found 2.1.265 to be the first that lists again, so the floor is now 2.1.265 and `ClaudeProcess.applyTools` uses the notification.
+8. **A tool added while a `tools/call` is open is offered in the same turn.** The CLI listed again 2 ms after the notification, and the model request that followed the tool result called the new tool (`list-changed-mid-call`).
+9. **A removed tool is gone from the CLI, not from the model's memory.** `mcp_status` and the next turn's `system init` no longer list it, but a model that has just used it may still emit a `tool_use` for it; the CLI refuses that itself and no `tools/call` reaches the server (`list-removed`).
 
 One thing the spike showed that the plan had not anticipated: the `tools/call` and the `message_stop` of the assistant message that asked for it arrive in either order. See "State that becomes Effect primitives".
 
@@ -283,7 +286,7 @@ Every `Effect.log*` call then becomes an event on the current span **(tested)**,
 ## Where RcMap fits, and where it doesn't
 
 - **Not the process pool.** `RcMap` derives a resource from its key alone and shares it. A parked process depends on the request (signature, acknowledged history), is exclusive, and has an idle time that depends on why it was parked (10 minutes after a turn, 30 minutes in a handoff). 4.0.3's per-key `idleTimeToLive` does not change this.
-- **Not needed at all on the in-band route.** Its one use was the bridge's schema files. The tool surface is now a JSON string in the launch signature.
+- **Not needed at all on the in-band route.** Its one use was the bridge's schema files. The tool surface is a list the process holds and the in-band server lists on request.
 
 ## Services
 
@@ -373,7 +376,7 @@ Three ordering rules:
 - **Never await a retire on the failure or abort path.** Retiring can take 2.5 s; awaiting it would delay `aborted` by that long. This now also holds when a parked process is replaced on the spawn path, which the old code awaited.
 - **Taking or launching a process and recording it are one uninterruptible step.** The first full scenario run caught this: an abort landing between `pool.launch` returning and the episode recording the process left a process that was neither parked nor retired until the runtime was disposed. `abort-during-launch` covers it.
 
-`decideEpisodeMode` (`src/episode-mode.ts`) is a pure function of the parked process's facts and the request. The launch signature is a struct, not a JSON string, so a spawn names the setting that changed (`signature.prompt`, `signature.tools`, …).
+`decideEpisodeMode` (`src/episode-mode.ts`) is a pure function of the parked process's facts and the request. The launch signature is a struct, not a JSON string, so a spawn names the setting that changed (`signature.prompt`, `signature.cwd`, …).
 
 ## File layout
 
@@ -476,29 +479,31 @@ The rewrite is complete on the local branch `effect-rewrite` and has not been pu
 
 What has been verified, and how:
 
-| What                                                            | How                                                                                                           |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| Every service path against the stub CLI                         | `npm run test:scenarios`: 31 scenarios, each asserting on its trace and on `--no-open`                        |
-| Registration, lazy load under jiti, print-mode exit             | `npm run test:e2e` and `print-mode-exit`, on pi 0.84.2, 0.87.1 and 1.1.0                                      |
-| One turn, a held-open tool call, a warm follow-up, real CLI     | `node scripts/scenarios.ts --live` on Claude Code 2.1.292                                                     |
-| Real pi tools and guards, a provider switch, compaction, recall | `tests/live-pi-roundtrip.test.ts`                                                                             |
-| Thinking changes on a live process, read off the wire           | `tests/live-thinking.test.ts`: haiku 4.5 and sonnet 5, four levels each on one process, and a mid-tool change |
-| The in-band MCP protocol on the version floor                   | `scripts/spikes/inband-mcp.ts` against Claude Code 2.1.263                                                    |
-| The pure modules                                                | `npm run test:coverage`: 92% / 85% floors over five modules                                                   |
+| What                                                                                | How                                                                                                           |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Every service path against the stub CLI                                             | `npm run test:scenarios`: 33 scenarios, each asserting on its trace and on `--no-open`                        |
+| Registration, lazy load under jiti, print-mode exit                                 | `npm run test:e2e` and `print-mode-exit`, on pi 0.84.2, 0.87.1 and 1.1.0                                      |
+| One turn, a held-open tool call, a warm follow-up, real CLI                         | `node scripts/scenarios.ts --live` (`live`) on Claude Code 2.1.292 and the 2.1.265 floor                      |
+| Two tool calls in one message, each given its own result, real CLI                  | `live-parallel-tools`, on both versions                                                                       |
+| Tools added between turns and during a call, then removed, on one process, real CLI | `live-tools-change`, on both versions                                                                         |
+| Real pi tools and guards, a provider switch, compaction, recall                     | `tests/live-pi-roundtrip.test.ts`                                                                             |
+| Thinking changes on a live process, read off the wire                               | `tests/live-thinking.test.ts`: haiku 4.5 and sonnet 5, four levels each on one process, and a mid-tool change |
+| The in-band MCP protocol on the version floor                                       | `scripts/spikes/inband-mcp.ts` against Claude Code 2.1.265                                                    |
+| The pure modules                                                                    | `npm run test:coverage`: 92% / 85% floors over five modules                                                   |
 
 Known limits:
 
 - **Windows is not supported.**
 - **The provider has only run on macOS.** CI will run the unit tests, e2e and scenarios on Linux once the branch is pushed; none of that has run there yet.
-- **Only the in-band protocol was run on the 2.1.263 floor**, not the provider's scenarios or live tests.
-- **Parallel tool calls are verified against the stub only** (`tool-handoff-parallel`); no live run produced two tool calls in one message.
+- **On the 2.1.265 floor the three live scenarios were run**, not `tests/live-*.test.ts`.
+- **The real CLI runs parallel tool calls one at a time.** It streams both `tool_use` blocks in one message but sends the second `tools/call` only after the first is answered (pi's tools carry no read-only hint). Both results are already there by then, so the second is answered at once. Calls open at the same time are exercised by the stub only (`tool-handoff-parallel`).
+- **A removal is checked at the CLI, not at the model**: see spike result 9.
 - **`event-bridge.ts` is still an accumulator** and session and tool-use ids are plain strings; see "What changed from the plan".
 
 Worth doing next, in order of value:
 
-1. **Change the tool surface on a live process.** Today a different tool list retires the process and reimports pi's whole history, which misses the prompt cache for the conversation. On 2.1.292 `notifications/tools/list_changed` avoids that (spike result 7). It needs a version gate, because the 2.1.263 floor ignores the notification, or a raised floor; `ClaudeProcess` would gain an `applyTools` beside `applyThinking`, and `tools` would leave the launch signature.
-2. **Raise the version floor** once nobody is on 2.1.263, and rerun the spike's `probe` on each new Claude Code release: the wire format is undocumented.
-3. **An OTLP exporter** (`effect/observability`'s `OtlpTracer.layer`) beside the file sink, if traces are ever wanted in a collector.
+1. **Rerun the spike's `probe` on each new Claude Code release**: the wire format is undocumented, and `applyTools` depends on the CLI listing its tools again.
+2. **An OTLP exporter** (`effect/observability`'s `OtlpTracer.layer`) beside the file sink, if traces are ever wanted in a collector.
 
 ## What changed from the plan
 
