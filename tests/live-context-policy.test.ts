@@ -16,7 +16,6 @@ import { streamViaCli } from "../src/provider";
 import { startHandoffBroker, stopHandoffBroker } from "../src/handoff-broker";
 import { writeSchemaFile, cleanupMcpConfigFiles } from "../src/mcp-config";
 import { takeParkedCliProcess } from "../src/cli-process";
-import { getCliSession } from "../src/session-map";
 import { createReadTool } from "@earendil-works/pi-coding-agent";
 
 const LIVE = process.env.PI_OWNED_LIVE === "1";
@@ -46,7 +45,6 @@ describe.skipIf(!LIVE)("live pi-owned default", () => {
 
   beforeAll(async () => {
     ws = realpathSync.native(mkdtempSync(join(tmpdir(), "pcc-context-")));
-    vi.stubEnv("PI_CLAUDE_CLI_CONTEXT", "pi");
     vi.stubEnv("PI_CLAUDE_CLI_SYSTEM_PROMPT", "claude");
     vi.stubEnv("PI_CLAUDE_CLI_STATE_DIR", join(ws, "state"));
     vi.stubEnv("ENABLE_TOOL_SEARCH", "false");
@@ -204,7 +202,6 @@ describe.skipIf(!LIVE)("live pi-owned default", () => {
     "uses only pi tools, stays warm, reimports a native turn, and persists no CLI session",
     { timeout: 180000 },
     async () => {
-      delete process.env.PI_CLAUDE_CLI_CONTEXT;
       const first = await turn(
         "Use the pi read tool to read payload.txt and the listed pi-probe skill file. Call context_probe once. Reply with the project word, file word, skill word and tool word. No other files or shell commands.",
       );
@@ -231,7 +228,6 @@ describe.skipIf(!LIVE)("live pi-owned default", () => {
       expect(existsSync(join(ws, "foreign-hook-ran"))).toBe(false);
       expect(existsSync(join(ws, "foreign-mcp-ran"))).toBe(false);
       expect(existsSync(join(ws, "host-hook-ran"))).toBe(true);
-      expect(getCliSession(sessionId)).toBeUndefined();
       expect(
         init.tools.filter(
           (name: string) => !name.startsWith("mcp__custom-tools__"),

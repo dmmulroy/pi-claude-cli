@@ -3,7 +3,6 @@ import { parseLine } from "../src/stream-parser";
 import type {
   ClaudeStreamEventMessage,
   ClaudeResultMessage,
-  ClaudeSystemMessage,
 } from "../src/types";
 
 describe("parseLine", () => {
@@ -46,7 +45,7 @@ describe("parseLine", () => {
       const result = parseLine(line);
       expect(result).not.toBeNull();
       expect(result!.type).toBe("system");
-      expect((result as ClaudeSystemMessage).subtype).toBe("init");
+      expect((result as unknown as { subtype: string }).subtype).toBe("init");
     });
 
     it("parses a valid control_request message", () => {

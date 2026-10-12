@@ -1,19 +1,17 @@
 /**
  * Control protocol handler for Claude CLI stream-json communication.
  *
- * Processes control_request messages from Claude CLI stdout and writes
- * control_response messages to stdin.
+ * Processes control_request (permission) messages from Claude CLI stdout and
+ * writes control_response messages to stdin.
  *
- * - Custom MCP tools (mcp__custom-tools__*): ALLOWED when the handoff proxy is
- *   on — the schema server forwards the call to pi and the CLI keeps running;
- *   DENIED otherwise, so the legacy interrupt-and-resume handoff can run the
- *   tool in pi.
- * - Everything else (user MCP tools, internal tools): ALLOWED — Claude handles
+ * - pi's tools (mcp__custom-tools__*): ALLOWED when the handoff proxy is on —
+ *   the schema server forwards the call to pi and the CLI keeps running;
+ *   DENIED otherwise, so the turn can be interrupted and pi runs the tool.
+ * - Everything else: DENIED. Nothing but pi's tools may execute.
  */
 
 import type { ClaudeControlRequest } from "./types";
 import { CUSTOM_TOOLS_MCP_PREFIX } from "./tool-mapping.js";
-import { usesPiContext } from "./context-policy.js";
 
 export const TOOL_EXECUTION_DENIED_MESSAGE =
   "Tool execution is unavailable in this environment.";
@@ -43,8 +41,8 @@ interface ControlResponse {
 /**
  * Handle a control_request from the Claude CLI.
  *
- * @param options.allowHandoff - true when a handoff proxy will execute custom
- *   tools in pi; false (default) denies them so the interrupt path runs them.
+ * @param options.allowHandoff - true when the handoff proxy will route pi's
+ *   tools to pi; false (default) denies them so the interrupt path runs them.
  * @returns true if the tool was allowed, false if denied
  */
 export function handleControlRequest(
@@ -62,7 +60,7 @@ export function handleControlRequest(
 
   const toolName = msg.request?.tool_name ?? "";
   const isCustomTool = toolName.startsWith(CUSTOM_TOOLS_MCP_PREFIX);
-  const deny = isCustomTool ? !options?.allowHandoff : usesPiContext();
+  const deny = isCustomTool ? !options?.allowHandoff : true;
 
   const response: ControlResponse = {
     type: "control_response",

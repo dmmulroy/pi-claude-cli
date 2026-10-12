@@ -70,50 +70,25 @@ describe("control-handler", () => {
     });
   });
 
-  describe("allows user MCP tools and other tools", () => {
-    it("allows user MCP tool mcp__database__query and returns true", () => {
-      const { stream, chunks } = createMockStdin();
-      const msg = makeControlRequest("mcp__database__query");
+  describe("denies everything that is not one of pi's tools", () => {
+    it.each(["mcp__database__query", "Read", "ToolSearch", "SomeUnknownTool"])(
+      "denies %s, with or without the handoff proxy",
+      (toolName) => {
+        for (const options of [undefined, { allowHandoff: true }]) {
+          const { stream, chunks } = createMockStdin();
 
-      const result = handleControlRequest(msg, stream);
+          const result = handleControlRequest(
+            makeControlRequest(toolName),
+            stream,
+            options,
+          );
 
-      expect(result).toBe(true);
-      const response = JSON.parse(chunks[0].trim());
-      expect(response.response.response.behavior).toBe("allow");
-    });
-
-    it("allows built-in tool Read", () => {
-      const { stream, chunks } = createMockStdin();
-      const msg = makeControlRequest("Read");
-
-      const result = handleControlRequest(msg, stream);
-
-      expect(result).toBe(true);
-      const response = JSON.parse(chunks[0].trim());
-      expect(response.response.response.behavior).toBe("allow");
-    });
-
-    it("allows internal tools like ToolSearch", () => {
-      const { stream, chunks } = createMockStdin();
-      const msg = makeControlRequest("ToolSearch");
-
-      const result = handleControlRequest(msg, stream);
-
-      expect(result).toBe(true);
-      const response = JSON.parse(chunks[0].trim());
-      expect(response.response.response.behavior).toBe("allow");
-    });
-
-    it("allows unknown tools", () => {
-      const { stream, chunks } = createMockStdin();
-      const msg = makeControlRequest("SomeUnknownTool");
-
-      const result = handleControlRequest(msg, stream);
-
-      expect(result).toBe(true);
-      const response = JSON.parse(chunks[0].trim());
-      expect(response.response.response.behavior).toBe("allow");
-    });
+          expect(result).toBe(false);
+          const response = JSON.parse(chunks[0].trim());
+          expect(response.response.response.behavior).toBe("deny");
+        }
+      },
+    );
   });
 
   describe("response format", () => {
@@ -152,9 +127,9 @@ describe("control-handler", () => {
 
     it("allow response does not include a message field", () => {
       const { stream, chunks } = createMockStdin();
-      const msg = makeControlRequest("mcp__database__query");
+      const msg = makeControlRequest("mcp__custom-tools__deploy");
 
-      handleControlRequest(msg, stream);
+      handleControlRequest(msg, stream, { allowHandoff: true });
 
       const response = JSON.parse(chunks[0].trim());
       expect(response.response.response.message).toBeUndefined();

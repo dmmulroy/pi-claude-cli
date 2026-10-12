@@ -69,7 +69,6 @@ export default function(pi) {
       cwd,
       env: {
         PI_CODING_AGENT_DIR: join(cwd, "agent"),
-        PI_CLAUDE_CLI_CONTEXT: "pi",
       },
       provider: "pi-claude-cli",
       model: "claude-opus-4-6",

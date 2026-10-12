@@ -11,7 +11,6 @@ vi.mock("../src/handoff-broker", () => ({
   stopHandoffBroker: vi.fn(),
 }));
 vi.mock("../src/mcp-config", () => ({
-  getCustomToolDefs: vi.fn(),
   writeSchemaFile: vi.fn(() => ({
     schemaPath: "schema",
     version: 1,
@@ -32,7 +31,6 @@ import { writeSchemaFile } from "../src/mcp-config";
 
 beforeEach(() => {
   vi.clearAllMocks();
-  delete process.env.PI_CLAUDE_CLI_CONTEXT;
 });
 
 describe("pi ownership at registration", () => {
@@ -71,6 +69,7 @@ describe("pi ownership at registration", () => {
       await handlers.get(event)();
     }
     expect(retireAllCliProcesses).toHaveBeenCalledTimes(5);
-    expect(setStatus).toHaveBeenCalledWith("claude-subagents", undefined);
+    // No status-line channel: nothing from this provider lands in pi's footer.
+    expect(setStatus).not.toHaveBeenCalled();
   });
 });

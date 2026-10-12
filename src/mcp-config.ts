@@ -1,32 +1,24 @@
 /**
- * Custom tool discovery and MCP config file generation.
+ * Staging of pi's tool schemas and the per-process `--mcp-config` files that
+ * point the CLI at the schema-only MCP server (src/mcp-schema-server.cjs).
  *
- * Discovers non-built-in tools from pi, writes their schemas to a temp file,
- * and generates MCP config files that point to the schema-only MCP server.
+ * Schema files are content-addressed: each distinct tool surface gets its own
+ * file named by a hash of its JSON, and a file is never rewritten. A request
+ * therefore always spawns against exactly the surface it asked for, even when
+ * another request with a different surface (a tool-less title-generation
+ * call, say) runs at the same moment. A shared path rewritten in place let
+ * that second request clobber the first one's tools before its schema server
+ * had read them (upstream issue #49). `version` identifies the surface, so a
+ * parked CLI process spawned against a different one can be retired (its tool
+ * list is what the CLI advertised at connect time).
  *
- * The schema file is refreshed whenever pi's tool surface changes. pi packages
- * register and unregister tools at runtime — pi-mcp-adapter re-registers its
- * `mcp` gateway with a new description every time an MCP server is added,
- * enabled or disabled — so a snapshot taken at the first turn goes stale for
- * the rest of the session. Schema files are content-addressed: each distinct
- * tool surface gets its own file named by a hash of its JSON, and a file is
- * never rewritten. A request therefore always spawns against exactly the
- * surface it asked for, even when another request with a different surface
- * (a tool-less title-generation call, say) runs at the same moment. A shared
- * path rewritten in place let that second request clobber the first one's
- * tools before its schema server had read them (upstream issue #49).
- * `version` identifies the surface, so a parked CLI process spawned against
- * a different one can be retired (its tool list is what the CLI advertised
- * at connect time).
- *
- * Config files are per CLI session: each carries the session id so the
- * schema server can route proxied `tools/call` requests back to the right pi
- * session over the handoff socket (src/handoff-broker.ts).
+ * Config files are per CLI process: each carries the process's session id so
+ * the schema server can route proxied `tools/call` requests back to the pi
+ * call that owns it over the handoff socket (src/handoff-broker.ts).
  *
  * Every file here is staged in this process's private 0700 runtime directory
  * and written 0600. A session config names the handoff socket and the CLI
- * session id — enough, before this was locked down, for another local user to
- * address the broker directly.
+ * session id.
  */
 
 import { writeFileSync, unlinkSync } from "node:fs";
@@ -35,31 +27,14 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runtimeFile, RUNTIME_FILE_MODE } from "./runtime-dir.js";
 
-/** The 6 built-in tools that pi handles natively (match pi tool names). */
-const BUILT_IN_TOOL_NAMES = new Set([
-  "read",
-  "write",
-  "edit",
-  "bash",
-  "grep",
-  "find",
-]);
-
-/** A custom tool definition with MCP-compatible schema. */
+/** One of pi's tools, in the shape MCP `tools/list` returns. */
 export interface McpToolDef {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
 }
 
-/** Outcome of a write: where the config lives, and whether anything changed. */
-export interface McpConfigWrite {
-  configPath: string;
-  /** False when the tool surface was byte-identical to the last write. */
-  changed: boolean;
-}
-
-/** The staged schema file and how many times it has been rewritten. */
+/** Where a tool surface is staged, and whether this call staged it. */
 export interface SchemaFileWrite {
   schemaPath: string;
   changed: boolean;
@@ -75,41 +50,12 @@ const stagedSchemas = new Map<
   string,
   { schemaPath: string; version: number }
 >();
-/** The legacy per-process config file's content never varies: written once. */
-let configWritten = false;
 /** Per-session config files this process wrote, for exit cleanup. */
 const sessionConfigPaths = new Map<string, string>();
-
-/**
- * Get custom tool definitions from pi, filtering out built-in tools.
- *
- * @param pi - The pi ExtensionAPI instance
- * @returns Array of custom tool definitions (empty if all tools are built-in)
- */
-export function getCustomToolDefs(pi: any): McpToolDef[] {
-  const allTools = pi.getAllTools();
-
-  if (!Array.isArray(allTools)) {
-    return [];
-  }
-
-  return allTools
-    .filter((tool: any) => !BUILT_IN_TOOL_NAMES.has(tool.name))
-    .map((tool: any) => ({
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.parameters,
-    }));
-}
 
 /** Where this process stages one tool surface, named by its content hash. */
 function schemaFilePath(contentHash: string): string {
   return runtimeFile(`mcp-schemas-${contentHash}.json`);
-}
-
-/** Where this process stages the legacy (session-less) `--mcp-config` file. */
-function configFilePath(): string {
-  return runtimeFile("mcp-config.json");
 }
 
 function sessionConfigFilePath(cliSessionId: string): string {
@@ -149,35 +95,6 @@ export function writeSchemaFile(toolDefs: McpToolDef[]): SchemaFileWrite {
   const entry = { schemaPath, version: stagedSchemas.size + 1 };
   stagedSchemas.set(contentHash, entry);
   return { ...entry, changed: true };
-}
-
-/**
- * Write MCP config and tool schemas to temp files (session-less form: no
- * handoff proxy, the server answers `tools/call` with an error).
- *
- * @param toolDefs - Array of custom tool definitions
- * @returns The config file path, and whether this call rewrote the schemas
- */
-export function writeMcpConfig(toolDefs: McpToolDef[]): McpConfigWrite {
-  const configPath = configFilePath();
-  const { schemaPath, changed } = writeSchemaFile(toolDefs);
-
-  if (!configWritten) {
-    const config = {
-      mcpServers: {
-        "custom-tools": {
-          command: "node",
-          args: [serverPath(), schemaPath],
-        },
-      },
-    };
-    writeFileSync(configPath, JSON.stringify(config), {
-      mode: RUNTIME_FILE_MODE,
-    });
-    configWritten = true;
-  }
-
-  return { configPath, changed };
 }
 
 /**
@@ -227,13 +144,12 @@ export function removeSessionMcpConfig(cliSessionId: string): void {
 
 /**
  * Remove every temp file. Registered on `process.on("exit")`, so it must stay
- * synchronous. A SIGKILLed process still leaks, exactly as it does for the
- * system-prompt file.
+ * synchronous. A SIGKILLed process still leaks them, inside its private
+ * runtime directory.
  */
 export function cleanupMcpConfigFiles(): void {
   const paths = [
     ...[...stagedSchemas.values()].map((staged) => staged.schemaPath),
-    configFilePath(),
     ...sessionConfigPaths.values(),
   ];
   sessionConfigPaths.clear();
@@ -250,6 +166,5 @@ export function cleanupMcpConfigFiles(): void {
 /** Test seam: forget what this process has already written. */
 export function resetMcpConfigCache(): void {
   stagedSchemas.clear();
-  configWritten = false;
   sessionConfigPaths.clear();
 }

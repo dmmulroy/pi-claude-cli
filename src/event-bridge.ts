@@ -1,11 +1,8 @@
 import type {
   ClaudeApiEvent,
-  ClaudeAssistantEnvelope,
   ClaudeModelUsage,
   ClaudeResultMessage,
   ClaudeUsage,
-  ClaudeUserEnvelope,
-  ClaudeCompactBoundary,
   TrackedContentBlock,
 } from "./types";
 import { calculateCost } from "@earendil-works/pi-ai";
@@ -17,17 +14,9 @@ import type {
   ThinkingContent,
   ToolCall,
 } from "@earendil-works/pi-ai";
-import {
-  mapClaudeToolNameToPi,
-  translateClaudeArgsToPi,
-  isHandoffClaudeTool,
-} from "./tool-mapping.js";
-import { buildCallPayload, buildResultPayload } from "./tool-markers.js";
+import { mapClaudeToolNameToPi, isHandoffClaudeTool } from "./tool-mapping.js";
 
-/**
- * Extended tracking for tool_use content blocks during streaming.
- * Stores the Claude tool name for argument translation at block_stop.
- */
+/** Extended tracking for tool_use content blocks during streaming. */
 interface TrackedToolBlock {
   type: "tool_use";
   index: number;
@@ -36,7 +25,6 @@ interface TrackedToolBlock {
   contentIndex: number;
   id: string;
   name: string; // Already mapped to pi name
-  claudeName: string; // Original Claude name for arg translation
   arguments: Record<string, unknown>;
   partialJson: string;
 }
@@ -53,36 +41,6 @@ type TrackedBlock = TrackedContentBlock | TrackedToolBlock;
 export interface EventBridge {
   handleEvent(event: ClaudeApiEvent): void;
   /**
-   * Complete-message envelopes (one per finished content block). Used for
-   * CLI-side tool visibility: tools pi cannot execute (WebSearch, user MCP
-   * servers, ToolSearch, …) run inside the CLI between cycles and would
-   * otherwise be invisible — each becomes a one-line marker text block.
-   */
-  handleAssistantEnvelope(envelope: ClaudeAssistantEnvelope): void;
-  /**
-   * The `user` envelopes the CLI feeds back between cycles, carrying a
-   * `tool_result` for each CLI-side tool it executed. Dropped unless the
-   * host opts in with PI_CLAUDE_CLI_TOOL_RESULTS=1, in which case each
-   * result becomes a `result` marker paired to its call marker by
-   * tool_use_id — the missing half that lets a front-end render CLI-side
-   * tools as expandable rows instead of fire-and-forget lines.
-   */
-  handleUserEnvelope(envelope: ClaudeUserEnvelope): void;
-  /**
-   * The CLI compacted its own session mid-episode. Resets the reported
-   * context to the compacted size and appends a `[Claude Code · compact {…}]`
-   * marker so a front-end can draw its compaction divider where the cut
-   * actually happened.
-   */
-  handleCompactBoundary(envelope: ClaudeCompactBoundary): void;
-  /**
-   * Append a pre-built marker text block. Used for sub-agent lifecycle, whose
-   * events arrive as top-level `system` envelopes rather than content blocks
-   * (`src/task-tracker.ts`). The bridge stays the only writer of
-   * `output.content`.
-   */
-  appendMarker(text: string): void;
-  /**
    * The final `result` envelope: authoritative cumulative usage for the
    * whole episode, plus a safety net that appends the final answer text if
    * any stream pathology kept it out of the bridged content.
@@ -96,47 +54,11 @@ export interface EventBridge {
  *
  * `JSON.parse` happily returns null, arrays, numbers and strings for input
  * that is valid JSON but cannot be a tool's arguments. Passing any of those
- * to pi fails its schema check, and `null` in particular breaks
- * `translateClaudeArgsToPi`, which calls `Object.entries` on it.
+ * to pi as arguments fails its schema check.
  */
 function isArgumentObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-/**
- * Host opt-in for forwarding CLI-side tool results as `result` markers.
- * Read per call, not at module load, so a host (or a test) can flip it
- * without re-importing. Off by default: without it the wire format is
- * byte-identical to what shipped before 0.6.0, because a front-end that
- * has not learned the id-tagged shapes would render them as prose.
- */
-function resultForwardingEnabled(): boolean {
-  return process.env.PI_CLAUDE_CLI_TOOL_RESULTS === "1";
-}
-
-/**
- * Flatten a tool_result's `content` to text. The CLI sends either a plain
- * string or an array of blocks; only text blocks contribute (a Read of an
- * image yields tool_reference/image blocks and an empty preview).
- */
-function resultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter(
-      (block): block is { type: "text"; text: string } =>
-        !!block &&
-        typeof block === "object" &&
-        (block as { type?: unknown }).type === "text" &&
-        typeof (block as { text?: unknown }).text === "string",
-    )
-    .map((block) => block.text)
-    .join("\n");
-}
-
-/**
- * Map Claude API stop reasons to pi's stop reason format.
- */
 
 function mapStopReason(
   reason: string | undefined,
@@ -158,14 +80,13 @@ function mapStopReason(
  *
  * The bridge maintains internal state to track content blocks and
  * accumulate the final AssistantMessage. It handles:
- * - text content blocks (start/delta/stop -> text_start/text_delta/text_end)
- * - message lifecycle (message_start for usage, message_delta for stop reason, message_stop for done)
- * - unsupported block types (tool_use, thinking) with warnings
+ * - text and thinking content blocks (start/delta/stop)
+ * - tool_use blocks for pi's tools (toolcall_start/delta/end)
+ * - message lifecycle (message_start for usage, message_delta for stop reason)
  */
 export function createEventBridge(
   stream: AssistantMessageEventStream,
   model: Model<any>,
-  options?: { markedTools?: Map<string, string> },
 ): EventBridge {
   // Tracked content blocks indexed by Claude's content_block index
   const blocks: TrackedBlock[] = [];
@@ -191,10 +112,11 @@ export function createEventBridge(
 
   let started = false;
 
-  // One subprocess run is a full agentic EPISODE: N API calls ("cycles")
-  // with CLI-side tool executions between them. SSE content_block indexes
-  // reset every cycle, so blocks are matched per-cycle; usage is summed
-  // across cycles (each message_delta carries that cycle's final numbers).
+  // An episode normally holds one API call ("cycle"), but nothing stops the
+  // CLI from making another before the episode ends. SSE content_block
+  // indexes reset every cycle, so blocks are matched per-cycle; usage is
+  // summed across cycles (each message_delta carries that cycle's final
+  // numbers).
   let cycle = -1;
   const cumulativeUsage: Required<ClaudeUsage> = {
     input_tokens: 0,
@@ -220,19 +142,6 @@ export function createEventBridge(
    * billed — and `totalTokens` carries the last cycle's context instead.
    */
   let lastCycleContext = 0;
-  /**
-   * Tool ids already surfaced as markers (the envelope arrives once per
-   * block), mapped to the tool each call named — the result marker reports
-   * it, so a front-end can render a result row without pairing first.
-   *
-   * Shared across the episodes of one CLI process when the caller passes a
-   * map: a built-in tool called in one episode may report its result in the
-   * next (the process kept running through a proxied handoff).
-   */
-  const markedTools = options?.markedTools ?? new Map<string, string>();
-  /** tool_use_ids whose result marker already went out (CLI dupe guard). */
-  const forwardedResultIds = new Set<string>();
-
   /**
    * Fold per-model spend into one `ClaudeUsage`.
    *
@@ -304,8 +213,8 @@ export function createEventBridge(
 
   /**
    * Append a complete text block through proper pi stream events. Tracked
-   * blocks carry their own contentIndex, so appended blocks (markers, the
-   * final-answer safety net) need no relationship to any SSE index.
+   * blocks carry their own contentIndex, so an appended block (the
+   * final-answer safety net) needs no relationship to any SSE index.
    */
   function appendTextBlock(text: string): void {
     if (!started) {
@@ -416,10 +325,9 @@ export function createEventBridge(
     } else if (blockType === "tool_use") {
       const claudeName = event.content_block!.name!;
 
-      // Observer mode: the CLI executes its own tools (built-ins, WebSearch,
-      // user MCP, Task). Those surface as marker text via the envelope path,
-      // never as pi toolCall blocks. Only HANDOFF tools — custom pi tools
-      // behind the schema-only MCP server — become toolCalls for pi's loop.
+      // Only pi's tools, advertised through the schema-only MCP server,
+      // become toolCalls for pi's loop. The CLI is spawned with no native
+      // tools, so anything else is a name the model invented.
       if (!isHandoffClaudeTool(claudeName)) {
         return;
       }
@@ -434,7 +342,6 @@ export function createEventBridge(
         contentIndex: output.content.length,
         id,
         name: piName,
-        claudeName,
         arguments: {},
         partialJson: "",
       };
@@ -610,13 +517,11 @@ export function createEventBridge(
       // into a tool that silently ran with no arguments.
       let finalArgs: Record<string, unknown> | string;
       if (block.partialJson.trim() === "") {
-        finalArgs = translateClaudeArgsToPi(block.claudeName, {});
+        finalArgs = {};
       } else {
         try {
           const parsed = JSON.parse(block.partialJson);
-          finalArgs = isArgumentObject(parsed)
-            ? translateClaudeArgsToPi(block.claudeName, parsed)
-            : block.partialJson;
+          finalArgs = isArgumentObject(parsed) ? parsed : block.partialJson;
         } catch {
           finalArgs = block.partialJson;
         }
@@ -671,163 +576,6 @@ export function createEventBridge(
     // Pushing done here (synchronously) prevents pi from executing tools.
   }
 
-  function handleAssistantEnvelope(envelope: ClaudeAssistantEnvelope): void {
-    // Sub-agent envelopes are the CLI's internal business.
-    if (envelope.parent_tool_use_id) return;
-    for (const block of envelope.message?.content ?? []) {
-      if (block.type !== "tool_use" || !block.name || !block.id) continue;
-      // Handoff tools already streamed through the SSE path as real pi
-      // tool calls — markers are for everything the CLI executes itself,
-      // which in observer mode includes the built-in file tools.
-      if (isHandoffClaudeTool(block.name)) continue;
-      if (markedTools.has(block.id)) continue;
-      markedTools.set(block.id, block.name);
-
-      let argsPayload = "";
-      try {
-        argsPayload = buildCallPayload(block.name, block.input);
-      } catch {
-        /* unserializable input — marker still names the tool */
-      }
-      // WIRE CONTRACT — front-ends parse these strings.
-      //
-      //   [Claude Code · <ToolName>]              (no arguments)
-      //   [Claude Code · <ToolName> <argsJson>]
-      //
-      // With PI_CLAUDE_CLI_TOOL_RESULTS=1 — a host opt-in, because a
-      // front-end that has not learned these shapes renders them as prose —
-      // the call marker gains an id tag and a result marker follows when the
-      // CLI reports the tool's outcome (`handleUserEnvelope`):
-      //
-      //   [Claude Code · <ToolName> #<toolUseId> <argsJson>]
-      //   [Claude Code · result #<toolUseId> <payloadJson>]
-      //
-      // BOTH payloads are complete, parseable JSON — since 0.8.0 for the
-      // call payload, which used to be `JSON.stringify(input)` cut at 120
-      // characters and so was usually invalid and usually missing the end of
-      // the one value worth reading. `src/tool-markers.ts` explains what
-      // that cost and what it selects instead.
-      //
-      // Phosphor matches /^\[Claude Code · ([^\s\]]+)(?:\s+([\s\S]*))?\]$/ to
-      // render these as activity rows instead of prose; anything it cannot
-      // match falls back to being shown as raw markdown, which is what this
-      // marker existed to avoid. Change the shapes only together with the
-      // consumers.
-      const idTag = resultForwardingEnabled() ? ` #${block.id}` : "";
-      const args = argsPayload ? ` ${argsPayload}` : "";
-      appendTextBlock(`[Claude Code · ${block.name}${idTag}${args}]`);
-    }
-  }
-
-  function handleUserEnvelope(envelope: ClaudeUserEnvelope): void {
-    if (!resultForwardingEnabled()) return;
-    // Sub-agent envelopes are the CLI's internal business, same as in
-    // handleAssistantEnvelope.
-    if (envelope.parent_tool_use_id) return;
-    const blocks = envelope.message?.content ?? [];
-    // `tool_use_result` sits on the ENVELOPE, not on the block, so it can
-    // only be attributed when the envelope carries a single result. In every
-    // capture so far the CLI sends one per envelope; a batched envelope from
-    // some future version degrades to the text-only summary rather than
-    // labelling one tool's outcome with another's metrics.
-    const results = blocks.filter((block) => block.type === "tool_result");
-    const detail = results.length === 1 ? envelope.tool_use_result : undefined;
-
-    for (const block of blocks) {
-      if (block.type !== "tool_result" || !block.tool_use_id) continue;
-      // Only results for tools that got a call marker. Everything else is
-      // either a handoff replay (pi executed it and has the real result —
-      // rendering it again would double it) or noise from an envelope this
-      // bridge never saw.
-      const tool = markedTools.get(block.tool_use_id);
-      if (!tool) continue;
-      if (forwardedResultIds.has(block.tool_use_id)) continue;
-      forwardedResultIds.add(block.tool_use_id);
-
-      let payload: Record<string, unknown>;
-      try {
-        payload = buildResultPayload({
-          tool,
-          isError: block.is_error === true,
-          text: resultText(block.content),
-          detail,
-        });
-      } catch {
-        // A marker must never cost a turn. Status alone still pairs.
-        payload = { status: block.is_error ? "error" : "ok", tool };
-      }
-      appendTextBlock(
-        `[Claude Code · result #${block.tool_use_id} ${JSON.stringify(payload)}]`,
-      );
-    }
-  }
-
-  /**
-   * Normalize the CLI's compaction record from either spelling (see
-   * `ClaudeCompactBoundary`). Only finite, non-negative numbers count as a
-   * figure; anything else is "not reported" rather than a zero the host
-   * would then believe.
-   */
-  function readCompactMetadata(envelope: ClaudeCompactBoundary): {
-    trigger?: string;
-    preTokens?: number;
-    postTokens?: number;
-    durationMs?: number;
-  } {
-    const raw = (envelope.compact_metadata ??
-      envelope.compactMetadata ??
-      {}) as Record<string, unknown>;
-    const num = (...keys: string[]): number | undefined => {
-      for (const key of keys) {
-        const value = raw[key];
-        if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-          return value;
-        }
-      }
-      return undefined;
-    };
-    return {
-      trigger: typeof raw.trigger === "string" ? raw.trigger : undefined,
-      preTokens: num("pre_tokens", "preTokens"),
-      postTokens: num("post_tokens", "postTokens"),
-      durationMs: num("duration_ms", "durationMs"),
-    };
-  }
-
-  function handleCompactBoundary(envelope: ClaudeCompactBoundary): void {
-    const meta = readCompactMetadata(envelope);
-
-    // The context the model holds NOW is the compacted one. The CLI's
-    // summarization pass is an API call whose prompt is the entire
-    // pre-compaction conversation, and it is the last `message_start` this
-    // bridge sees before the CLI carries on — so left alone, the latch keeps
-    // that prompt as "the last cycle". Captured 2026-09-16: pi was told
-    // 316,760 for a session the CLI had just cut to 37,239, and compacted its
-    // own record on the phantom two minutes later. Bank the finished cycle
-    // first so recomputeUsage() cannot re-latch it.
-    if (meta.postTokens !== undefined && meta.postTokens > 0) {
-      cumulativeUsage.input_tokens += cycleUsage.input_tokens ?? 0;
-      cumulativeUsage.output_tokens += cycleUsage.output_tokens ?? 0;
-      cumulativeUsage.cache_read_input_tokens +=
-        cycleUsage.cache_read_input_tokens ?? 0;
-      cumulativeUsage.cache_creation_input_tokens +=
-        cycleUsage.cache_creation_input_tokens ?? 0;
-      cycleUsage = {};
-      lastCycleContext = meta.postTokens;
-      recomputeUsage();
-    }
-
-    // Same wire shape as every other marker (`[Claude Code · Name {json}]`),
-    // no `#id` tag because nothing pairs with it. Only reported figures go
-    // in: a host must not read an absent `postTokens` as zero.
-    const payload: Record<string, unknown> = {};
-    if (meta.trigger !== undefined) payload.trigger = meta.trigger;
-    if (meta.preTokens !== undefined) payload.preTokens = meta.preTokens;
-    if (meta.postTokens !== undefined) payload.postTokens = meta.postTokens;
-    if (meta.durationMs !== undefined) payload.durationMs = meta.durationMs;
-    appendTextBlock(`[Claude Code · compact ${JSON.stringify(payload)}]`);
-  }
-
   function applyResult(result: ClaudeResultMessage): void {
     // Authoritative spend for the whole episode. `modelUsage` is preferred
     // over `usage` because `usage` is the MAIN AGENT ONLY: sub-agents run
@@ -873,10 +621,6 @@ export function createEventBridge(
 
   return {
     handleEvent,
-    handleAssistantEnvelope,
-    handleUserEnvelope,
-    handleCompactBoundary,
-    appendMarker: appendTextBlock,
     applyResult,
     getOutput: () => output,
   };

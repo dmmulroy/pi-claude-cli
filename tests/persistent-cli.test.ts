@@ -1,14 +1,11 @@
 /**
- * The persistent CLI process (0.7.0): one process per pi session that lives
- * through proxied handoffs and across turns, so Claude Code builds its system
- * prompt — git snapshot included — once per session instead of once per call.
+ * The persistent CLI process: one process per pi session that lives through
+ * proxied tool calls and across turns, so pi's history is imported once per
+ * process instead of once per call.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 vi.mock("cross-spawn", () => ({
   default: vi.fn(() => {
@@ -61,7 +58,6 @@ import {
 } from "../src/handoff-broker";
 import type { HandoffResult } from "../src/handoff-broker";
 import { resetMcpConfigCache } from "../src/mcp-config";
-import { getSystemPrompt } from "../src/session-map";
 
 const model = {
   id: "claude-opus-5",
@@ -132,7 +128,6 @@ const doneOf = (n: number) =>
   MockStream.mock.instances[n]._events.find((e: any) => e.type === "done");
 
 describe("persistent CLI process", () => {
-  let stateDir: string;
   const opts = (sessionId: string, extra: any = {}) => ({
     sessionId,
     mcpConfig: {
@@ -149,9 +144,6 @@ describe("persistent CLI process", () => {
     resetCliProcessesForTests();
     resetHandoffBrokerForTests();
     resetMcpConfigCache();
-    stateDir = mkdtempSync(join(tmpdir(), "pcc-persist-"));
-    process.env.PI_CLAUDE_CLI_STATE_DIR = stateDir;
-    process.env.PI_CLAUDE_CLI_SYSTEM_PROMPT = "claude";
     delete process.env.PI_CLAUDE_CLI_KEEPALIVE_MS;
     delete process.env.PI_CLAUDE_CLI_HANDOFF_PROXY;
   });
@@ -159,17 +151,12 @@ describe("persistent CLI process", () => {
   afterEach(() => {
     resetCliProcessesForTests();
     vi.useRealTimers();
-    delete process.env.PI_CLAUDE_CLI_STATE_DIR;
-    delete process.env.PI_CLAUDE_CLI_SYSTEM_PROMPT;
-    delete process.env.PI_CLAUDE_CLI_CONTEXT;
     delete process.env.PI_CLAUDE_CLI_KEEPALIVE_MS;
     delete process.env.PI_CLAUDE_CLI_HANDOFF_PROXY;
-    rmSync(stateDir, { recursive: true, force: true });
   });
 
   describe("pi context continuity", () => {
-    it("keeps the aligned prompt and warm process across follow-up turns", async () => {
-      process.env.PI_CLAUDE_CLI_CONTEXT = "pi";
+    it("keeps the warm process across follow-up turns", async () => {
       const ctx = {
         systemPrompt: "PI-PROJECT-SENTINEL",
         messages: [{ role: "user", content: "first" }],
@@ -177,8 +164,6 @@ describe("persistent CLI process", () => {
       streamViaCli(model, ctx, opts("pi-context") as any);
       await vi.advanceTimersByTimeAsync(0);
       const proc = procAt(0);
-      const saved = getSystemPrompt(cliIdOf(0));
-      expect(saved).toBeUndefined();
       expect(spawnArgs(0)).toContain("--no-session-persistence");
       proc.stdout.write(
         startCycle({ input_tokens: 1 }) +
@@ -198,7 +183,6 @@ describe("persistent CLI process", () => {
       streamViaCli(model, next, opts("pi-context") as any);
       await vi.advanceTimersByTimeAsync(0);
       expect(spawn).toHaveBeenCalledTimes(1);
-      expect(getSystemPrompt(cliIdOf(0))).toBe(saved);
       proc.stdout.write(
         startCycle({ input_tokens: 1 }) +
           text("two") +
@@ -208,54 +192,10 @@ describe("persistent CLI process", () => {
       await vi.advanceTimersByTimeAsync(10);
       expect(doneOf(1).message.stopReason).toBe("stop");
     });
-
-    it("reimports legacy history without a manual reset or resuming the old ledger", async () => {
-      const ctx = {
-        systemPrompt: "LEGACY",
-        messages: [{ role: "user", content: "first" }],
-      };
-      streamViaCli(model, ctx, opts("pi-old") as any);
-      await vi.advanceTimersByTimeAsync(0);
-      procAt(0).stdout.write(
-        startCycle({ input_tokens: 1 }) +
-          text("one") +
-          endCycle("end_turn") +
-          result({}),
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      process.env.PI_CLAUDE_CLI_CONTEXT = "pi";
-      streamViaCli(
-        model,
-        {
-          ...ctx,
-          messages: [
-            ...ctx.messages,
-            ourAssistant(doneOf(0).message.content),
-            { role: "user", content: "second" },
-          ],
-        },
-        opts("pi-old") as any,
-      );
-      await vi.advanceTimersByTimeAsync(600);
-      expect(spawn).toHaveBeenCalledTimes(2);
-      expect(spawnArgs(1)).not.toContain("--resume");
-      expect(written(procAt(1)).join("")).toContain("second");
-      expect(written(procAt(1)).join("")).toContain("one");
-      expect(getSystemPrompt(cliIdOf(0))).toBeUndefined();
-      procAt(1).stdout.write(
-        startCycle({ input_tokens: 1 }) +
-          text("two") +
-          endCycle("end_turn") +
-          result(),
-      );
-      await vi.advanceTimersByTimeAsync(10);
-      expect(doneOf(1).message.stopReason).toBe("stop");
-    });
   });
 
   describe("default pi ownership", () => {
     it("returns a structured abort before spawning", () => {
-      delete process.env.PI_CLAUDE_CLI_CONTEXT;
       const controller = new AbortController();
       controller.abort();
       streamViaCli(model, { messages: [] }, { signal: controller.signal });
@@ -266,7 +206,6 @@ describe("persistent CLI process", () => {
     });
 
     it("surfaces the CLI error as an assistant error for pi retry/compaction", async () => {
-      delete process.env.PI_CLAUDE_CLI_CONTEXT;
       streamViaCli(
         model,
         { messages: [{ role: "user", content: "go" }] },
@@ -287,7 +226,6 @@ describe("persistent CLI process", () => {
     it.each(["native-turn", "branch", "compaction", "prompt"])(
       "reimports pi context after %s without stale history",
       async (change) => {
-        delete process.env.PI_CLAUDE_CLI_CONTEXT;
         const ctx = {
           systemPrompt: "old rules",
           messages: [{ role: "user", content: "original" }],
@@ -345,14 +283,12 @@ describe("persistent CLI process", () => {
         );
         await vi.advanceTimersByTimeAsync(10);
         expect(doneOf(1).message.stopReason).toBe("stop");
-        expect(getSystemPrompt(cliIdOf(1))).toBeUndefined();
       },
     );
   });
 
   describe("proxied handoff", () => {
     it("hands the tool to pi WITHOUT interrupting, then answers the CLI's tools/call from the next pi call on the same process", async () => {
-      delete process.env.PI_CLAUDE_CLI_CONTEXT;
       const ctx1 = { messages: [{ role: "user", content: "search please" }] };
       streamViaCli(model, ctx1, opts("pi-A") as any);
       await vi.advanceTimersByTimeAsync(0);
@@ -506,7 +442,7 @@ describe("persistent CLI process", () => {
       expect(spawn).toHaveBeenCalledTimes(1);
     });
 
-    it("falls back to a fresh --resume when the delta is not exactly the awaited tool results", async () => {
+    it("retires the process and reimports pi's history when the delta is not exactly the awaited tool results", async () => {
       const ctx1 = { messages: [{ role: "user", content: "go" }] };
       streamViaCli(model, ctx1, opts("pi-C") as any);
       await vi.advanceTimersByTimeAsync(0);
@@ -533,17 +469,20 @@ describe("persistent CLI process", () => {
       };
       streamViaCli(model, ctx2, opts("pi-C") as any);
       await vi.advanceTimersByTimeAsync(0);
-      // The live process is interrupted and retired; a new one resumes the session.
+      // The live process is interrupted and retired; a fresh one is handed
+      // pi's whole history, tool result and new user message included.
       expect(written(proc1).join("")).toContain('"interrupt"');
       await vi.advanceTimersByTimeAsync(2600);
       expect(spawn).toHaveBeenCalledTimes(2);
-      expect(spawnArgs(1)).toContain("--resume");
-      const sent = JSON.parse(written(procAt(1))[0]).message.content;
-      expect(String(sent)).toContain("TOOL RESULT (x)");
-      expect(String(sent)).toContain("and look at this");
+      expect(spawnArgs(1)).not.toContain("--resume");
+      const sent = JSON.stringify(
+        JSON.parse(written(procAt(1))[0]).message.content,
+      );
+      expect(sent).toContain("TOOL RESULT (x, id=t3, error=false):");
+      expect(sent).toContain("and look at this");
     });
 
-    it("PI_CLAUDE_CLI_HANDOFF_PROXY=0 restores the interrupt-and-resume handoff", async () => {
+    it("PI_CLAUDE_CLI_HANDOFF_PROXY=0 interrupts the turn at a tool call instead of proxying it", async () => {
       process.env.PI_CLAUDE_CLI_HANDOFF_PROXY = "0";
       streamViaCli(
         model,
@@ -631,7 +570,6 @@ describe("persistent CLI process", () => {
     };
 
     it("applies a new level to the warm process before the next user message", async () => {
-      delete process.env.PI_CLAUDE_CLI_CONTEXT;
       const messages = await firstTurn("think-1", "medium");
       expect(after(spawnArgs(0), "--effort")).toBe("medium");
       expect(after(spawnArgs(0), "--max-thinking-tokens")).toBe("8192");
@@ -668,7 +606,6 @@ describe("persistent CLI process", () => {
     });
 
     it("turns thinking off mid-session without a respawn", async () => {
-      delete process.env.PI_CLAUDE_CLI_CONTEXT;
       const messages = await firstTurn("think-2", "medium");
       streamViaCli(model, { messages }, opts("think-2") as any); // pi's off
       await ackAll(procAt(0));
@@ -681,7 +618,6 @@ describe("persistent CLI process", () => {
     });
 
     it("writes no controls when the level did not change", async () => {
-      delete process.env.PI_CLAUDE_CLI_CONTEXT;
       const messages = await firstTurn("think-3", "low");
       streamViaCli(
         model,
@@ -698,7 +634,6 @@ describe("persistent CLI process", () => {
     });
 
     it("spawns with the new flags when the live process refuses the change", async () => {
-      delete process.env.PI_CLAUDE_CLI_CONTEXT;
       const messages = await firstTurn("think-4", "medium");
       streamViaCli(
         model,
@@ -719,7 +654,6 @@ describe("persistent CLI process", () => {
     });
 
     it("keeps a handoff's turn as is; the change lands on the next user turn", async () => {
-      delete process.env.PI_CLAUDE_CLI_CONTEXT;
       const ctx1 = { messages: [{ role: "user", content: "search please" }] };
       streamViaCli(
         model,
@@ -780,7 +714,7 @@ describe("persistent CLI process", () => {
       ]);
     });
 
-    it("applies the change in place under the legacy policy too", async () => {
+    it("applies the change in place when thinking budgets are passed explicitly", async () => {
       const ctx1 = { messages: [{ role: "user", content: "first" }] };
       streamViaCli(model, ctx1, opts("think-6", { reasoning: "high" }) as any);
       await vi.advanceTimersByTimeAsync(0);
@@ -836,7 +770,10 @@ describe("persistent CLI process", () => {
         .map((w: string) => JSON.parse(w))
         .filter((m: any) => m.type === "user");
       expect(users).toHaveLength(2);
-      expect(String(users[1].message.content)).toContain("second");
+      // Only the delta is written to the warm process, never the history.
+      const delta = JSON.stringify(users[1].message.content);
+      expect(delta).toContain("second");
+      expect(delta).not.toContain("first");
       expect(String(users[1].message.content)).not.toContain("first");
 
       proc.stdout.write(
@@ -997,10 +934,11 @@ describe("persistent CLI process", () => {
       await vi.advanceTimersByTimeAsync(600);
       expect(spawn).toHaveBeenCalledTimes(2);
       expect(procAt(0).stdin.end).toHaveBeenCalled();
-      expect(spawnArgs(1)).toContain("--resume");
+      expect(spawnArgs(1)).not.toContain("--resume");
+      expect(written(procAt(1)).join("")).toContain("first");
     });
 
-    it("retires the parked process after the keepalive window; the next turn resumes on disk", async () => {
+    it("retires the parked process after the keepalive window; the next turn reimports pi's history", async () => {
       process.env.PI_CLAUDE_CLI_KEEPALIVE_MS = "1000";
       const ctx1 = { messages: [{ role: "user", content: "first" }] };
       streamViaCli(model, ctx1, opts("pi-I") as any);
@@ -1026,10 +964,13 @@ describe("persistent CLI process", () => {
       streamViaCli(model, ctx2, opts("pi-I") as any);
       await vi.advanceTimersByTimeAsync(0);
       expect(spawn).toHaveBeenCalledTimes(2);
-      expect(spawnArgs(1)).toContain("--resume");
+      expect(spawnArgs(1)).not.toContain("--resume");
+      const replay = written(procAt(1)).join("");
+      expect(replay).toContain("first");
+      expect(replay).toContain("second");
     });
 
-    it("PI_CLAUDE_CLI_KEEPALIVE_MS=0 ends the process at result, as before 0.7.0", async () => {
+    it("PI_CLAUDE_CLI_KEEPALIVE_MS=0 ends the process at result", async () => {
       process.env.PI_CLAUDE_CLI_KEEPALIVE_MS = "0";
       streamViaCli(
         model,

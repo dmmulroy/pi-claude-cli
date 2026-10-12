@@ -1,6 +1,6 @@
 # Pi-owned context and execution
 
-This is the default from 0.9.0. `PI_CLAUDE_CLI_CONTEXT=pi` is accepted but not required. The explicit `legacy` value retains the observer implementation documented in [ARCHITECTURE.md](ARCHITECTURE.md).
+This is the only execution path in this fork. Upstream's `legacy` observer path and the `PI_CLAUDE_CLI_CONTEXT` switch are removed.
 
 ## Request contract
 
@@ -12,7 +12,7 @@ Only tools in the model request are exposed through MCP. No registry-wide activa
 
 ## CLI launch
 
-The default launches with:
+Every launch uses:
 
 - `--system-prompt-file`, even for an empty pi prompt
 - `--tools "" --no-session-persistence`
@@ -27,7 +27,7 @@ A CLI process is a disposable cache, not another source of truth. After each suc
 
 Reuse requires an unchanged history prefix and launch signature. A tool handoff must also contain exactly the awaited tool results. Changed history, prompt or tools retire the process and import pi's current context in order. This covers native-provider turns, branch edits, compaction, extension context rewrites and process restarts. No stale saved prompt or CLI transcript is resumed. The thinking level is not part of the launch signature: a new level is applied to the live process through Claude Code's control requests before the next user turn, and only a refused change retires it ([ARCHITECTURE.md](ARCHITECTURE.md#thinking-the-same-request-pi-would-send-0100)).
 
-Model selection, session start/shutdown, tree navigation and compaction retire parked processes. Rate-limit and agent status are cleared on lifecycle resets. Old policy pairings and saved prompt sidecars are detached on the next pi-owned request; archived Claude transcripts are not deleted or read.
+Model selection, session start/shutdown, tree navigation and compaction retire parked processes. Session-map and saved-prompt sidecars written by upstream versions before 0.9.0 are neither read nor deleted.
 
 A CLI import uses ordered, role-labelled content because print mode does not accept an arbitrary structured transcript. Every supplied user/tool image and tool result is retained, including errors; internal thinking is not replayed. This is semantic continuity, not identical wire requests or guaranteed identical model behavior.
 
@@ -35,11 +35,11 @@ A CLI import uses ordered, role-labelled content because print mode does not acc
 
 pi owns compaction and retry. Hosts must stop forcing `set_auto_compaction: false` for this provider. A compacted pi history invalidates the disposable Claude process before the next request. Errors and aborts return structured assistant errors, not raw strings or success messages; the existing overflow normalizer enables pi's recovery path.
 
-A stopped/failed process is not reused. Default runs write no Claude conversation file or resume sidecar. Temporary MCP configuration is removed on retirement/exit; prompt staging files are removed after an episode and the private runtime directory on pi exit. SIGKILL cannot run cleanup and may leave its private directory.
+A stopped/failed process is not reused. Runs write no Claude conversation file or resume sidecar. Temporary MCP configuration is removed on retirement/exit; prompt staging files are removed after an episode and the private runtime directory on pi exit. SIGKILL cannot run cleanup and may leave its private directory.
 
 ## Verification
 
-Unit coverage includes changed prompts, branch/compaction rewrites, foreign-provider turns, unchanged-prefix reuse, complete replay, inactive/removed tools, current pi transcript format, lifecycle retirement and structured errors. Legacy tests explicitly select `legacy`.
+Unit coverage includes changed prompts, branch/compaction rewrites, foreign-provider turns, unchanged-prefix reuse, complete replay, inactive/removed tools, current pi transcript format, lifecycle retirement and structured errors.
 
 ```sh
 npm run typecheck

@@ -3,7 +3,7 @@
 # CLI stub — no credentials or network model calls needed.
 #
 # Exercises: extension load, provider + api-registry registration (the print
-# mode path from rchern/pi-claude-cli#32), subprocess spawn, stream-json
+# mode path), subprocess spawn, stream-json
 # NDJSON parsing, and the event bridge.
 #
 # Requires `pi` on PATH (npm i -g @earendil-works/pi-coding-agent).
@@ -32,7 +32,7 @@ else
   TIMEOUT=()
 fi
 # `-ne` is load-bearing, not tidiness: a developer whose pi settings already
-# list `npm:@saccolabs/pi-claude-cli` gets the INSTALLED copy discovered
+# list this package gets the INSTALLED copy discovered
 # alongside `-e`, and the published provider wins the name. The suite then
 # silently tests the release instead of the working tree — which is how a
 # green run reported the exact bug it was written to catch.
@@ -55,27 +55,6 @@ if ! grep -q "PORT-OK" <<<"$OUT"; then
   exit 1
 fi
 
-# Background sub-agents must survive the turn's first `result`. The stub emits
-# one there and only reports the agent afterwards, so a provider that kills on
-# it prints LAUNCHED-WAITING and nothing else.
-FAN="$(PI_CLAUDE_CLI_CONTEXT=legacy run_pi "fanout")"
-
-echo "--- fan-out output ---"
-echo "$FAN"
-echo "----------------------"
-
-if ! grep -q "AGENT-REPORT" <<<"$FAN"; then
-  echo "e2e FAILED: sub-agent never reported back (killed on the first result)" >&2
-  exit 1
-fi
-if ! grep -q "Dig into the thing" <<<"$FAN"; then
-  echo "e2e FAILED: expected a sub-agent lifecycle marker" >&2
-  exit 1
-fi
-if grep -q "Search for a local checkout" <<<"$FAN"; then
-  echo "e2e FAILED: an auto-backgrounded Bash was reported as a sub-agent" >&2
-  exit 1
-fi
 # pi's thinking level must reach the CLI as the flags pi's own Anthropic
 # provider would send: off as thinking disabled (pi passes no level for off),
 # anything else as budget + effort + summaries.

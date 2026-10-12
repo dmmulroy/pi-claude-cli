@@ -1,9 +1,9 @@
 /**
  * Process manager for spawning and managing Claude CLI subprocesses.
  *
- * Handles subprocess lifecycle: spawn with correct CLI flags, write NDJSON
- * messages to stdin, force-kill after result (CLI hangs bug), and stderr capture.
- * Also provides startup validation for CLI presence and authentication.
+ * Spawn with the CLI flags that make pi the owner of prompt and tools, write
+ * NDJSON messages to stdin, interrupt, force-kill, and capture stderr. Also
+ * provides startup validation for CLI presence and authentication.
  */
 
 import spawn from "cross-spawn";
@@ -12,46 +12,12 @@ import { writeFileSync, unlinkSync } from "node:fs";
 import type { ChildProcess } from "node:child_process";
 import { runtimeFile, RUNTIME_FILE_MODE } from "./runtime-dir.js";
 import {
-  DEFAULT_SYSTEM_PROMPT_MODE,
-  type SystemPromptMode,
-} from "./system-prompt-mode.js";
-import { resolveAutocompact } from "./autocompact.js";
-import {
-  usesPiContext,
-  ContextPolicyError,
-  assertContextCliVersion,
-} from "./context-policy.js";
-import { envFlag, isEphemeral } from "./env-flag.js";
+  CliRequirementError,
+  assertSupportedCliVersion,
+} from "./cli-requirements.js";
+import { envFlag } from "./env-flag.js";
 import { thinkingSpawnArgs, type CliThinking } from "./thinking-config.js";
 
-/**
- * Spawn a Claude CLI subprocess with all required flags for stream-json communication.
- *
- * @param modelId - The model ID to pass via --model flag
- * @param systemPrompt - Optional system prompt. In `claude` mode it is appended
- *   to Claude Code's own via --append-system-prompt-file; in `pi` mode it
- *   replaces it via --system-prompt-file. The `-file` suffix is required: the
- *   unsuffixed flags take a literal string. See src/system-prompt-mode.ts.
- * @param options - Optional cwd, AbortSignal, thinking and prompt mode
- * @returns The spawned ChildProcess with piped stdin/stdout/stderr
- */
-/** Truthy PI_CLAUDE_CLI_HERMETIC opts in to hermetic mode (see README). */
-function isHermetic(): boolean {
-  return envFlag("PI_CLAUDE_CLI_HERMETIC");
-}
-
-/**
- * Truthy PI_CLAUDE_CLI_STRICT_MCP restricts the CLI to this extension's own
- * schema-only server WITHOUT hermetic mode's settings blackout (see README).
- */
-function isStrictMcp(): boolean {
-  return envFlag("PI_CLAUDE_CLI_STRICT_MCP");
-}
-
-/**
- * Where a spawn's system prompt is staged. Scoped to the CLI session so
- * concurrent turns in one pi process cannot clobber each other.
- */
 /** One hour: the MCP tool-call timeout handed to the CLI when unset. */
 export const DEFAULT_MCP_TOOL_TIMEOUT_MS = 3_600_000;
 
@@ -72,44 +38,60 @@ export const SUBSCRIPTION_OVERRIDE_ENV_VARS = [
  */
 export const STDERR_CAPTURE_LIMIT_CHARS = 64 * 1024;
 
-function systemPromptFilePath(sessionKey?: string): string {
+/**
+ * Where a spawn's system prompt is staged. Scoped to the CLI session so
+ * concurrent turns in one pi process cannot clobber each other.
+ */
+function systemPromptFilePath(cliSessionId: string): string {
   // In the private 0700 runtime directory, written 0600: the prompt carries
-  // pi's instructions and the host's project context, which used to sit in a
-  // world-readable /tmp file under a pid-derived name.
-  const suffix = sessionKey
-    ? `-${sessionKey.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128)}`
-    : "";
-  return runtimeFile(`pi-claude-cli-sysprompt${suffix}.txt`);
+  // pi's instructions and the project context.
+  const suffix = cliSessionId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128);
+  return runtimeFile(`pi-claude-cli-sysprompt-${suffix}.txt`);
 }
 
+/**
+ * Spawn a Claude CLI subprocess that serves pi: stream-json on both pipes,
+ * pi's system prompt in place of Claude Code's, no native tools, and none of
+ * the user's Claude Code settings, memory, skills or MCP servers.
+ *
+ * @param modelId - The model ID to pass via --model
+ * @param systemPrompt - pi's system prompt. It REPLACES Claude Code's via
+ *   --system-prompt-file. The `-file` suffix is required: the unsuffixed flag
+ *   takes a literal string, so handing it a path makes the path the prompt.
+ * @param options.cliSessionId - Provider-minted id for this process; keys its
+ *   staged prompt file and MCP config.
+ * @returns The spawned ChildProcess with piped stdin/stdout/stderr
+ * @throws CliRequirementError when the installed CLI or environment cannot
+ *   provide the isolation this provider depends on
+ */
 export function spawnClaude(
   modelId: string,
-  systemPrompt?: string,
-  options?: {
+  systemPrompt: string,
+  options: {
+    cliSessionId: string;
     cwd?: string;
-    signal?: AbortSignal;
     /** The thinking this process starts with; see src/thinking-config.ts. */
     thinking?: CliThinking;
     mcpConfigPath?: string;
-    resumeSessionId?: string;
-    newSessionId?: string;
-    systemPromptMode?: SystemPromptMode;
   },
 ): ChildProcess {
-  const piContext = usesPiContext();
-  if (piContext) {
-    assertContextCliVersion(
-      execSync("claude --version", { stdio: "pipe", timeout: 5000 }).toString(),
+  assertSupportedCliVersion(
+    execSync("claude --version", { stdio: "pipe", timeout: 5000 }).toString(),
+  );
+  if (envFlag("CLAUDE_CODE_SIMPLE") || envFlag("CLAUDE_CODE_SAFE_MODE")) {
+    throw new CliRequirementError(
+      "Unset CLAUDE_CODE_SIMPLE/CLAUDE_CODE_SAFE_MODE: pi-claude-cli requires subscription authentication and the explicit MCP bridge.",
     );
   }
-  if (
-    piContext &&
-    (envFlag("CLAUDE_CODE_SIMPLE") || envFlag("CLAUDE_CODE_SAFE_MODE"))
-  ) {
-    throw new ContextPolicyError(
-      "Unset CLAUDE_CODE_SIMPLE/CLAUDE_CODE_SAFE_MODE: pi context requires subscription authentication and the explicit MCP bridge.",
-    );
-  }
+
+  // Staged as a file: it keeps the prompt off the command line (and avoids
+  // ENAMETOOLONG on Windows).
+  const promptFile = systemPromptFilePath(options.cliSessionId);
+  writeFileSync(promptFile, systemPrompt, {
+    encoding: "utf-8",
+    mode: RUNTIME_FILE_MODE,
+  });
+
   const args = [
     "-p",
     "--input-format",
@@ -122,102 +104,29 @@ export function spawnClaude(
     modelId,
     "--permission-prompt-tool",
     "stdio",
-    // `AskUserQuestion` renders a picker in the CLI's own TUI, and `-p` has
-    // no TUI. The call therefore cannot be answered by anyone: it returns
-    // "The user did not answer the questions." after a full round trip, and
-    // the model reads that as a person who declined and falls back to asking
-    // in prose. Captured 2026-08-28 on claude-sonnet-5, which then wrote
-    // "happy to discuss in plain text instead". Take the tool away so the
-    // model asks in prose the first time — the host's UI shows prose, and
-    // the user can answer it.
-    "--disallowedTools",
-    "AskUserQuestion",
+    // Only the servers from --mcp-config: the schema-only server carrying
+    // pi's tools. The user's personal and project MCP servers stay out.
+    "--strict-mcp-config",
+    // No user/project/local settings: hooks, CLAUDE.md memory, permission
+    // allowlists. Explicit host --settings and managed policy still apply.
+    "--setting-sources",
+    "",
+    "--disable-slash-commands",
+    "--no-chrome",
+    // No native tools: every tool is pi's.
+    "--tools",
+    "",
+    // The id keys this spawn's staged files; the CLI honours it without
+    // writing a transcript.
+    "--session-id",
+    options.cliSessionId,
+    // The process is a disposable cache of pi's history and is never resumed.
+    "--no-session-persistence",
+    "--system-prompt-file",
+    promptFile,
   ];
 
-  // Two independent ways to keep the user's Claude Code environment out of pi
-  // turns. Both flags verified accepted on claude 2.1.237.
-  //
-  // --strict-mcp-config loads ONLY the servers from --mcp-config (our
-  // schema-only custom-tools server survives; the user's personal and project
-  // MCP servers do not). A host wants this on its own: MCP servers the host
-  // did not configure are invisible to it, bypass its tool guards, and are
-  // never counted by pi-side status or context accounting.
-  if (piContext || isHermetic() || isStrictMcp()) {
-    args.push("--strict-mcp-config");
-  }
-
-  // An empty --setting-sources skips user/project/local settings — hooks,
-  // CLAUDE.md auto-memory, permission allowlists. Kept separate from the MCP
-  // flag on purpose: a host that already suppresses pi's own copy of
-  // CLAUDE.md relies on the CLI loading it, and bundling the two would leave
-  // the model with no project instructions from either side.
-  if (piContext || isHermetic()) {
-    args.push("--setting-sources", "");
-  }
-  if (piContext) {
-    args.push("--disable-slash-commands", "--no-chrome", "--tools", "");
-  }
-
-  if (!piContext && options?.resumeSessionId) {
-    // Resume an existing session — CLI loads prior conversation from disk
-    args.push("--resume", options.resumeSessionId);
-  } else if (options?.newSessionId) {
-    // First turn: create session with this ID so subsequent turns can --resume it
-    args.push("--session-id", options.newSessionId);
-  }
-
-  // Nothing the CLI would write here is ever read back, for one of two
-  // reasons. Under pi context the process is a disposable cache of pi's
-  // history and is never resumed. PI_CLAUDE_CLI_EPHEMERAL (src/env-flag.ts)
-  // marks a legacy one-shot with no next turn, so its transcript under
-  // ~/.claude/projects would be pure disk debris (~60 KB per call).
-  // --session-id stays: the id still keys this spawn's staged prompt and MCP
-  // config, and the CLI honours it without writing anything. Verified on
-  // claude 2.1.280 with exactly this flag set (stream-json + --session-id): no
-  // transcript written, the result envelope carried the requested session_id.
-  // A legacy pi session that only ever runs ephemeral never reaches --resume
-  // either: session-map.ts records no pairing for it to resume from.
-  if (piContext || isEphemeral()) {
-    args.push("--no-session-persistence");
-  }
-
-  if (systemPrompt || piContext) {
-    // Write the system prompt to a temp file and pass the FILE flags.
-    //
-    // `--system-prompt` / `--append-system-prompt` take a literal string, NOT
-    // a path: handing them a path makes the path itself the system prompt, so
-    // pi's instructions never reach the model and the session silently runs on
-    // Claude Code's defaults. Verified on claude 2.1.231 — with a path the
-    // model denied having the codename its prompt assigned; with
-    // `--system-prompt-file` it answered correctly. The file variants also keep
-    // the prompt off the command line, which is what avoids ENAMETOOLONG on
-    // Windows.
-    //
-    // Keyed by CLI session, not just pid: the prompt goes on every spawn
-    // (see provider.ts), and pi can run two turns of one process at once —
-    // its own sub-agents do. A shared per-pid path would let one turn
-    // overwrite the prompt another turn is about to read.
-    const tmpFile = systemPromptFilePath(
-      options?.resumeSessionId ?? options?.newSessionId,
-    );
-    writeFileSync(tmpFile, systemPrompt ?? "", {
-      encoding: "utf-8",
-      mode: RUNTIME_FILE_MODE,
-    });
-    // `pi` mode replaces Claude Code's prompt outright; `claude` mode layers
-    // pi's on top of it. See src/system-prompt-mode.ts for the trade-off.
-    const mode = piContext
-      ? "pi"
-      : (options?.systemPromptMode ?? DEFAULT_SYSTEM_PROMPT_MODE);
-    args.push(
-      mode === "pi" ? "--system-prompt-file" : "--append-system-prompt-file",
-      tmpFile,
-    );
-  }
-
-  // Host-supplied Claude Code settings (hooks, permissions). This is how a
-  // host injects PreToolUse guards — e.g. Phosphor's worktree-paths guard —
-  // without pi intercepting the CLI's native tool execution.
+  // Host-supplied Claude Code settings (hooks, permissions).
   const settingsPath = process.env.PI_CLAUDE_CLI_SETTINGS;
   if (settingsPath) {
     args.push("--settings", settingsPath);
@@ -226,53 +135,38 @@ export function spawnClaude(
   // A later turn may change these on the live process through control
   // requests (CliProcess.applyThinking), so they are the starting point, not
   // part of what makes a process reusable.
-  if (options?.thinking) {
+  if (options.thinking) {
     args.push(...thinkingSpawnArgs(options.thinking));
   }
 
-  if (options?.mcpConfigPath) {
+  if (options.mcpConfigPath) {
     args.push("--mcp-config", options.mcpConfigPath);
   }
 
-  // Auto-compact window (PI_CLAUDE_CLI_AUTOCOMPACT, default 200k — see
-  // src/autocompact.ts). The CLI does not keep flags across --resume, so
-  // like the system prompt this goes on every spawn. Resolved per spawn so
-  // a host can change the setting without restarting pi; the flag is
-  // config, not context, so changing it never invalidates the prompt cache.
-  const autocompact = resolveAutocompact();
-  if (!piContext && autocompact !== undefined) {
-    args.push("--autocompact", autocompact);
-  }
-
-  // Proxied custom tools block inside the CLI's MCP client until pi has run
-  // the tool (src/handoff-broker.ts). Sub-agents and long shell tools take
-  // minutes, so unless the host set its own limit, give the MCP client an
-  // hour before it gives up on a call. Config, not context: it never touches
-  // the prompt cache.
-  const env = { ...process.env };
-  if (piContext) {
-    // Do not use --bare: it disables subscription OAuth/keychain reads.
-    // Empty setting sources drop user/project/local hooks, but explicit
-    // host --settings (including safety guards) and managed policy survive.
-    Object.assign(env, {
-      CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
-      CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-      ENABLE_CLAUDEAI_MCP_SERVERS: "false",
-      DISABLE_AUTO_COMPACT: "1",
-      DISABLE_COMPACT: "1",
-      ENABLE_TOOL_SEARCH: "false",
-    });
-  }
+  // Do not use --bare: it disables subscription OAuth/keychain reads.
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+    ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+    // pi owns compaction.
+    DISABLE_AUTO_COMPACT: "1",
+    DISABLE_COMPACT: "1",
+    ENABLE_TOOL_SEARCH: "false",
+  };
   // An exported API key, auth token or gateway URL silently moves the CLI off
   // the subscription login this provider exists to use: turns then bill an
   // API account, or fail against a gateway that was meant for another tool.
   for (const name of SUBSCRIPTION_OVERRIDE_ENV_VARS) delete env[name];
+  // Proxied tool calls block inside the CLI's MCP client until pi has run the
+  // tool (src/handoff-broker.ts). Long shell tools take minutes, so unless
+  // the host set its own limit, give the MCP client an hour.
   if (!env.MCP_TOOL_TIMEOUT)
     env.MCP_TOOL_TIMEOUT = String(DEFAULT_MCP_TOOL_TIMEOUT_MS);
 
   const proc = spawn("claude", args, {
     stdio: ["pipe", "pipe", "pipe"],
-    cwd: options?.cwd ?? process.cwd(),
+    cwd: options.cwd ?? process.cwd(),
     env,
   });
 
@@ -280,15 +174,12 @@ export function spawnClaude(
 }
 
 /**
- * Clean up the temp system prompt file created by spawnClaude.
+ * Remove the system prompt file spawnClaude staged for `cliSessionId`.
  * Safe to call multiple times or when no file exists.
- *
- * Pass the same CLI session key the spawn used; omitting it cleans the
- * unscoped path, which is all a spawn without a session id creates.
  */
-export function cleanupSystemPromptFile(sessionKey?: string): void {
+export function cleanupSystemPromptFile(cliSessionId: string): void {
   try {
-    unlinkSync(systemPromptFilePath(sessionKey));
+    unlinkSync(systemPromptFilePath(cliSessionId));
   } catch {
     // File doesn't exist or already deleted — ignore
   }
@@ -296,7 +187,8 @@ export function cleanupSystemPromptFile(sessionKey?: string): void {
 
 /**
  * Write a user message to the subprocess stdin as NDJSON.
- * Does NOT call stdin.end() -- stdin stays open for control_response in Phase 2.
+ * Does NOT call stdin.end(): stdin stays open for control responses and for
+ * the session's later turns.
  *
  * Accepts both string (text-only prompt) and array (ContentBlock[] with images)
  * content. JSON.stringify handles both natively. The stream-json protocol
@@ -321,10 +213,8 @@ export function writeUserMessage(
 
 /**
  * Ask the CLI to end the current turn cleanly — the same interrupt a human
- * Esc produces. Unlike SIGKILL this lets the CLI persist the turn, so the
- * session stays resumable without transcript corruption. The turn then ends
- * with a `result` of subtype `error_during_execution`, which callers must
- * treat as expected.
+ * Esc produces. The turn then ends with a `result` of subtype
+ * `error_during_execution`, which callers must treat as expected.
  */
 export function sendInterrupt(proc: ChildProcess): void {
   // `exitCode != null` (loose): undefined means "has not exited" on mocks and
@@ -377,19 +267,6 @@ export function killAllProcesses(): void {
     forceKillProcess(proc);
   }
   activeProcesses.clear();
-}
-
-/**
- * Force-kill the subprocess after a 500ms grace period.
- * The Claude CLI hangs after emitting the result message (known bug).
- * Brief grace period allows final stdout flushing before force-kill.
- *
- * @param proc - The Claude subprocess to clean up
- */
-export function cleanupProcess(proc: ChildProcess): void {
-  setTimeout(() => {
-    forceKillProcess(proc);
-  }, 500);
 }
 
 /**

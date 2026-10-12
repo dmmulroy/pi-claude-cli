@@ -1,15 +1,10 @@
 /**
  * One Claude CLI process that outlives a single pi call.
  *
- * Before 0.7.0 a process lived exactly one pi call: spawn, one user message,
- * read until `result`, kill. Every custom (handoff) tool call and every user
- * turn therefore started a fresh `claude -p --resume`, and each fresh process
- * rebuilt its system prompt — including Claude Code's git snapshot — so any
- * commit, branch rename or untracked file between two processes re-billed the
- * whole context as cache write (src/handoff-broker.ts has the numbers).
- *
- * A CliProcess instead stays alive:
- * - through a handoff: pi's stream ends at message_stop so pi can run the
+ * Spawning is expensive: a fresh process must be handed pi's whole history
+ * again, and that import misses the prompt cache. A CliProcess therefore
+ * stays alive:
+ * - through a tool call: pi's stream ends at message_stop so pi can run the
  *   tool, the CLI blocks on the proxied `tools/call`, and the next pi call
  *   attaches to the same process and answers it;
  * - between turns: after `result` the process is parked (idle timer) and the
@@ -31,7 +26,6 @@ import {
   sendInterrupt,
   forceKillProcess,
 } from "./process-manager.js";
-import { createTaskTracker } from "./task-tracker.js";
 import {
   registerHandoffTarget,
   unregisterHandoffTarget,
@@ -121,7 +115,7 @@ const DETACHED_BUFFER_LIMIT = 20_000;
 
 /** Grace after ending stdin before a still-running CLI is SIGKILLed. */
 const EXIT_GRACE_MS = 500;
-/** Grace after an interrupt for the CLI to persist the turn and emit result. */
+/** Grace after an interrupt for the CLI to end the turn and emit result. */
 const INTERRUPT_GRACE_MS = 2_000;
 /**
  * How long a thinking change may take to be acknowledged. The CLI answers in
@@ -154,14 +148,6 @@ export class CliProcess implements HandoffTarget {
   exitCode: number | null | undefined;
   /** Retired by the pool or the provider; no episode may attach again. */
   retired = false;
-
-  /**
-   * Shared across episodes: call markers whose results may arrive later,
-   * mapped to the tool each one named so its result marker can name it too.
-   */
-  readonly markedTools = new Map<string, string>();
-  /** Shared across episodes: sub-agents live in the process, not the call. */
-  readonly taskTracker = createTaskTracker();
 
   /**
    * `result.modelUsage` is cumulative for the PROCESS (verified 2026-09-02,
@@ -337,15 +323,6 @@ export class CliProcess implements HandoffTarget {
     for (const settle of [...this.controlWaiters.values()]) settle(false);
   }
 
-  /**
-   * The episode decided a `result` was not the end of the turn (the CLI
-   * answered a queued prompt of its own, or sub-agents are still running):
-   * the turn is live again for the process.
-   */
-  resumeTurn(): void {
-    if (this.alive && !this.retired) this.turnActive = true;
-  }
-
   // ---- handoff bookkeeping ------------------------------------------------
 
   /**
@@ -443,8 +420,7 @@ export class CliProcess implements HandoffTarget {
 
   /**
    * End the process for good. A live turn is interrupted first so the CLI
-   * persists its transcript (a SIGKILL mid-turn poisons every later resume
-   * with synthetic filler). Resolves once the process has closed or been
+   * can exit on its own. Resolves once the process has closed or been
    * force-killed.
    */
   retire(): Promise<void> {
@@ -481,7 +457,7 @@ export class CliProcess implements HandoffTarget {
       this.closeWaiters.push(() => clearTimeout(killTimer));
     };
     if (this.turnActive && !this.stdoutClosed) {
-      // Let the CLI persist the interrupted turn before stdin goes away.
+      // Let the CLI end the interrupted turn before stdin goes away.
       sendInterrupt(this.proc);
       const graceTimer = setTimeout(endThenKill, INTERRUPT_GRACE_MS);
       graceTimer.unref?.();
@@ -513,7 +489,7 @@ export class CliProcess implements HandoffTarget {
 
     if (msg.type === "control_request") {
       // Answered here so a permission prompt is never left waiting while no
-      // episode is attached (the CLI runs built-in tools during a handoff).
+      // episode is attached (a tool call parked in a handoff).
       handleControlRequest(msg, this.proc.stdin!, {
         allowHandoff: this.allowHandoff,
       });

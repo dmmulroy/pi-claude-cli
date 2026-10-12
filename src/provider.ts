@@ -1,25 +1,25 @@
 /**
- * Provider orchestration — observer mode (docs/SPEC-observer-mode.md).
+ * Provider orchestration: one pi model call, served by a Claude CLI process.
  *
- * The Claude CLI owns its loop, its tools, and its session. streamViaCli:
- * 1. Resolves the pi session's CLI session (session-map) — resume, or
- *    create/import a fresh one from pi's full history
- * 2. Reuses the session's live CLI process when one is parked (0.7.0), or
- *    spawns `claude -p` and writes the turn's prompt to stdin as NDJSON
- * 3. Streams events to pi: prose/thinking verbatim; the CLI's own tool
- *    executions as `[Claude Code · Name]` markers; HANDOFF tools (custom pi
- *    tools) as real pi toolCall blocks
- * 4. On a handoff tool at message_stop: ends pi's stream with
- *    stopReason=toolUse so pi executes the tool, while the CLI blocks on the
- *    proxied `tools/call`; the next pi call answers it on the SAME process
- *    (src/handoff-broker.ts, src/cli-process.ts). Without the proxy (no pi
- *    session id, or PI_CLAUDE_CLI_HANDOFF_PROXY=0) it falls back to a clean
- *    `interrupt` — never a kill, which corrupts the CLI transcript
- * 5. After `result`: parks the process for the next turn (idle timer) instead
- *    of killing it, so the CLI's system prompt — and its git snapshot — is
- *    built once per session, not once per call
- * 6. Hardened lifecycle: inactivity timeout, exit handler, streamEnded
- *    guard, abort = interrupt + delayed SIGKILL backstop, process registry
+ * pi owns the system prompt, the tools, the conversation and compaction. The
+ * Claude CLI contributes subscription authentication and model access, and is
+ * treated as a disposable cache of pi's history. streamViaCli:
+ * 1. Reuses the pi session's parked CLI process when this call continues the
+ *    history that process has acknowledged; otherwise spawns `claude -p` and
+ *    imports pi's full history as one user message (src/pi-context.ts)
+ * 2. Streams prose and thinking to pi verbatim, and every tool call as a real
+ *    pi toolCall block: all tools are pi's, advertised to the CLI through the
+ *    schema-only MCP server (src/mcp-schema-server.cjs)
+ * 3. On a tool call at message_stop: ends pi's stream with stopReason=toolUse
+ *    so pi executes the tool, while the CLI blocks on the proxied `tools/call`;
+ *    the next pi call answers it on the SAME process (src/handoff-broker.ts,
+ *    src/cli-process.ts). Without the proxy (no pi session id, or
+ *    PI_CLAUDE_CLI_HANDOFF_PROXY=0) the turn is interrupted instead and the
+ *    next call starts a fresh process from pi's history
+ * 4. After `result`: parks the process for the session's next call (idle
+ *    timer) instead of killing it
+ * 5. Hardened lifecycle: inactivity timeout, exit handler, streamEnded guard,
+ *    abort retires the process, process registry
  */
 
 import {
@@ -29,17 +29,6 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import {
-  buildPrompt,
-  buildSystemPrompt,
-  buildResumePrompt,
-} from "./prompt-builder.js";
-import { resolveSystemPromptMode } from "./system-prompt-mode.js";
-import {
-  usesPiContext,
-  assertContextPolicy,
-  ContextPolicyError,
-} from "./context-policy.js";
-import {
   spawnClaude,
   captureStderr,
   forceKillProcess,
@@ -48,23 +37,9 @@ import {
   sendInterrupt,
 } from "./process-manager.js";
 import { createEventBridge } from "./event-bridge.js";
-import { isTaskSubtype } from "./task-tracker.js";
-import type {
-  ClaudeModelUsage,
-  ClaudeUsage,
-  TaskTrackerState,
-} from "./types.js";
+import type { ClaudeModelUsage, ClaudeUsage } from "./types.js";
 import { resolveCliThinking } from "./thinking-config.js";
 import { isHandoffClaudeTool, mapClaudeToolNameToPi } from "./tool-mapping.js";
-import { resolveAutocompact } from "./autocompact.js";
-import {
-  getCliSession,
-  setCliSession,
-  clearCliSession,
-  getSystemPrompt,
-  setSystemPrompt,
-  clearSystemPrompt,
-} from "./session-map.js";
 import { writeSessionMcpConfig, removeSessionMcpConfig } from "./mcp-config.js";
 import {
   CliProcess,
@@ -82,14 +57,15 @@ import { handoffSecretFile } from "./handoff-broker.js";
 import { randomUUID } from "node:crypto";
 import {
   piContext as normalizePiContext,
+  piSystemPrompt,
   historyHash,
   replayPiMessages,
 } from "./pi-context.js";
 
 /**
- * Inactivity timeout. CLI-side tool executions (web search, user MCP
- * servers, sub-agents) can be silent on stdout for minutes, so the default
- * is generous and overridable via PI_CLAUDE_CLI_TIMEOUT_MS.
+ * Inactivity timeout: the longest the CLI may stay silent on stdout while an
+ * episode is attached. Tool execution does not count against it (pi runs
+ * tools between episodes). Overridable via PI_CLAUDE_CLI_TIMEOUT_MS.
  */
 const INACTIVITY_TIMEOUT_MS =
   Number(process.env.PI_CLAUDE_CLI_TIMEOUT_MS) > 0
@@ -97,81 +73,12 @@ const INACTIVITY_TIMEOUT_MS =
     : 300_000;
 
 /**
- * BACKGROUND SUB-AGENTS REPORT BACK, AND THIS IS WHY THEY DIDN'T.
- *
- * The CLI answers a background `Agent` call in milliseconds with "Async agent
- * launched successfully… you will be notified when it completes", and the
- * model — correctly, per its own tool contract — ends its turn to wait. The
- * CLI then emits `result` for that turn WHILE the agents keep running.
- * Killing on that first result is what made every fan-out a dead end: the
- * agents died mid-tool-call, their reports were never written, and the turn
- * closed on "Now waiting on the three investigation agents".
- *
- * The loop the host was assumed to owe the CLI turned out to be the CLI's
- * own. Captured 2026-08-28 on claude 2.1.231, holding the process open past
- * `result`: the sub-agent finished at +25s, `task_notification` carried its
- * report, the CLI re-invoked the model unprompted, and it answered with the
- * findings and emitted a SECOND `result`. Nothing was written to stdin to
- * make that happen.
- *
- * So the fix is to stop killing: while `pendingAgents()` is non-zero, a
- * `result` is a cycle boundary, not the end of the episode. Two bounds keep a
- * runaway fan-out from holding a turn open forever — the inactivity timer
- * (which `task_progress` keeps resetting for as long as agents do real work)
- * and the wall clock below.
- */
-const WAIT_FOR_AGENTS = process.env.PI_CLAUDE_CLI_NO_AGENT_WAIT !== "1";
-
-/** Hard ceiling on holding a turn open for sub-agents. */
-const AGENT_WAIT_TIMEOUT_MS =
-  Number(process.env.PI_CLAUDE_CLI_AGENT_WAIT_MS) > 0
-    ? Number(process.env.PI_CLAUDE_CLI_AGENT_WAIT_MS)
-    : 900_000;
-
-/**
- * Backstop on continuation cycles. Each completing agent costs one, and an
- * agent may launch more; this only exists so a pathological loop cannot spin
- * without end.
- */
-const MAX_AGENT_CONTINUATIONS = 32;
-
-/**
- * THE CLI CAN ANSWER A PROMPT THAT IS NOT OURS, AND THAT USED TO EAT A TURN.
- *
- * On `--resume` the CLI drains its own queue first. A session whose previous
- * turn launched a background task gets a `<task-notification>` enqueued ahead
- * of our prompt ("background shell command task(s) from the previous session
- * have no completion record") — orphaned because the pre-0.7.0 provider
- * exited the CLI at the end of every turn. The CLI dequeues the notification,
- * decides it needs no reply, and emits `result` in under a second, having
- * never called the model. Our prompt is still queued behind it.
- *
- * Ending the episode on that `result` is what made the user's first message
- * (and often the second) do nothing: pi got an assistant message with empty
- * content and zero tokens, and the CLI transcript was left ending on an
- * unanswered user entry — so the NEXT `--resume` spliced "Continue from where
- * you left off." / "No response requested." filler in to repair it. That
- * filler changes the cached prefix, so the whole conversation re-billed as
- * cache WRITE. Captured 2026-09-01 on claude 2.1.258: 329,944 cache-creation
- * tokens and zero cache read on the repairing resume, against ~400 write /
- * ~315k read on every healthy cycle of the same session.
- *
- * So a `result` that carried no content AND spent no tokens is a cycle
- * boundary, not the end of the episode (agustinsacco/pi-claude-cli#33,
- * folded in here). A persistent process makes the orphaning rare — the
- * process that launched the task usually still runs — but a retire-and-resume
- * can still hit it. Bounded below, and by the inactivity timer, which still
- * fires if the CLI has genuinely gone quiet.
- */
-const MAX_EMPTY_CONTINUATIONS = 4;
-
-/**
  * How long a parked CLI process waits for the next turn before it is retired
  * (PI_CLAUDE_CLI_KEEPALIVE_MS; `0`/`off` parks nothing — the process ends at
- * `result` as before 0.7.0, and only handoffs keep it alive). The default is
- * ten minutes: long enough to span a user reading an answer, short enough
- * that an abandoned session does not hold ~200 MB for an afternoon. The next
- * turn after a retire resumes the CLI session on disk as before.
+ * `result`, and only handoffs keep it alive). The default is ten minutes:
+ * long enough to span a user reading an answer, short enough that an
+ * abandoned session does not hold ~200 MB for an afternoon. The next turn
+ * after a retire imports pi's history into a fresh process.
  */
 const DEFAULT_KEEPALIVE_MS = 600_000;
 
@@ -197,41 +104,35 @@ const HANDOFF_WAIT_MS =
     ? Number(process.env.PI_CLAUDE_CLI_HANDOFF_WAIT_MS)
     : 1_800_000;
 
-/** Kill switch for the proxied handoff (falls back to interrupt-and-resume). */
+/** Kill switch for the proxied handoff (falls back to interrupt-and-reimport). */
 function handoffProxyAllowed(): boolean {
   return process.env.PI_CLAUDE_CLI_HANDOFF_PROXY !== "0";
 }
 
 /** Extended stream options: pi's SimpleStreamOptions plus host plumbing. */
-type StreamViaCLiOptions = SimpleStreamOptions & {
+type StreamViaCliOptions = SimpleStreamOptions & {
   cwd?: string;
-  /** Pre-built `--mcp-config` file used verbatim (tests, legacy hosts). */
+  /** Pre-built `--mcp-config` file used verbatim (tests). */
   mcpConfigPath?: string;
   /**
-   * The staged custom-tool schema and the handoff socket. The provider writes
-   * one config file per CLI session from these so the schema server can route
-   * proxied tool calls back to that session.
+   * The staged tool schema and the handoff socket. The provider writes one
+   * config file per CLI process from these so the schema server can route
+   * proxied tool calls back to that process.
    */
   mcpConfig?: {
     schemaPath: string;
-    /** Bumped whenever the schema file is rewritten. */
+    /** Identifies the tool surface staged at `schemaPath`. */
     version: number;
     /** Handoff socket path, or a promise of one (the broker starts lazily). */
     handoffSocket?: string | Promise<string | undefined>;
   };
-  /**
-   * Called with live sub-agent state as the CLI reports it. Ephemeral: this is
-   * progress, not transcript, and must never be folded into turn content. The
-   * durable half (start/finish) rides in the turn as markers instead.
-   */
-  onTaskProgress?: (state: TaskTrackerState) => void;
 };
 
 /**
- * The mapped CLI session is stale when pi's history moved on without it:
- * an assistant turn from another provider (model switch) after — or with no —
- * pi-claude-cli turn means the CLI never saw that exchange. Resuming would
- * answer from a conversation missing turns, so reimport instead.
+ * A parked process is stale when pi's history moved on without it: the most
+ * recent assistant turn came from another provider (model switch), so the
+ * process never saw that exchange. Continuing it would answer from a
+ * conversation missing turns, so reimport instead.
  */
 function cliSessionIsStale(messages: any[]): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -334,26 +235,28 @@ function bridgeUsage4(output: any): Usage4 {
 /**
  * Stream a response from Claude CLI as an AssistantMessageEventStream.
  *
- * Orchestrates the full subprocess lifecycle: resolve/resume the CLI session,
- * reuse or spawn the process, write the prompt or answer the pending handoff,
- * parse NDJSON, bridge events, handle result, park or clean up.
+ * Orchestrates the subprocess lifecycle for one pi model call: reuse the
+ * session's parked process or spawn one from pi's history, write the prompt or
+ * answer the pending tool calls, parse NDJSON, bridge events, handle the
+ * result, park or retire.
  *
  * @param model - The model to use (from pi's model catalog)
- * @param context - The conversation context with messages and system prompt
+ * @param context - pi's conversation: messages, system prompt and tools
  * @param options - Optional cwd, abort signal, reasoning level, thinking budgets, and MCP plumbing
  * @returns An AssistantMessageEventStream that receives bridged events
  */
 export function streamViaCli(
   model: Model<any>,
   context: { messages: any[]; systemPrompt?: string; tools?: any[] },
-  options?: StreamViaCLiOptions,
+  options?: StreamViaCliOptions,
 ): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
-  const piOwned = usesPiContext();
   // pi 0.86+ sends its prompt and tools as system messages and leaves
-  // systemPrompt empty. Both policies read the current ones from there.
-  context = normalizePiContext(context);
-  function failPiRequest(error: string, reason: "error" | "aborted" = "error") {
+  // systemPrompt empty. Read the current ones from there.
+  const piRequest = normalizePiContext(context);
+
+  /** End the stream with an error before any episode has attached. */
+  function failRequest(error: string, reason: "error" | "aborted" = "error") {
     const message = createEventBridge(stream, model).getOutput();
     stream.push({
       type: "error",
@@ -362,47 +265,31 @@ export function streamViaCli(
     } as any);
     stream.end();
   }
-  if (piOwned && options?.signal?.aborted) {
-    failPiRequest("Request aborted", "aborted");
+  if (options?.signal?.aborted) {
+    failRequest("Request aborted", "aborted");
     return stream;
   }
 
-  /**
-   * One attempt. Returns "resume-miss" (without touching the stream) when the
-   * sidecar pointed --resume at a CLI session that no longer exists on disk.
-   * The driver below retries once with a fresh session imported from pi's
-   * full history, re-recording the mapping.
-   */
-  async function runOnce(
-    forceFullReplay: boolean,
-  ): Promise<"ok" | "resume-miss"> {
+  async function runEpisode(): Promise<void> {
     let cli: CliProcess | undefined;
     let abortHandler: (() => void) | undefined;
-    let resumeMiss = false;
-    // Track HANDOFF tool_use blocks (custom pi tools) for the decision at
-    // message_stop. Built-ins run natively and never end the episode.
-    let sawHandoffTool = false;
-    // Set once we have asked the CLI to end the turn (legacy handoff or
-    // abort): stream content is frozen and only the result envelope is awaited.
+    // A tool_use block streamed in the current assistant message: the episode
+    // ends at message_stop so pi can execute it.
+    let sawToolCall = false;
+    // Set once we have asked the CLI to end the turn (interrupt fallback):
+    // stream content is frozen and only the result envelope is awaited.
     let selfInterrupted = false;
-    // Set on pi-initiated abort so the turn ends quietly, not as an error.
+    // Set on pi-initiated abort.
     let aborted = false;
-    // CLI session this attempt staged its system prompt under, so the finally
-    // below can remove the right file. Only set when this attempt spawned.
+    // CLI session this call staged its system prompt under, so the finally
+    // below can remove the right file. Only set when this call spawned.
     let promptFileKey: string | undefined;
     // The pi session, for parking.
     const piSessionId = options?.sessionId;
 
     try {
       const cwd = options?.cwd ?? process.cwd();
-      if (piOwned && piSessionId) {
-        const oldId = getCliSession(piSessionId);
-        if (oldId) {
-          clearCliSession(piSessionId);
-          clearSystemPrompt(oldId);
-        }
-      }
-      const messages = context.messages as any[];
+      const messages = piRequest.messages as any[];
       const stale = cliSessionIsStale(messages);
       const delta = deltaMessages(messages);
       const thinking = resolveCliThinking(
@@ -410,37 +297,24 @@ export function streamViaCli(
         options?.reasoning,
         options?.thinkingBudgets,
       );
-      const systemPromptMode = piOwned ? "pi" : resolveSystemPromptMode();
-      const piContext = usesPiContext();
-      // Never attach a new context policy to a transcript that still carries
-      // the other loader's instructions. Leave that session available under
-      // its original policy; the host/user must start a fresh pi session.
-      const mappedContextId =
-        !piOwned && piSessionId ? getCliSession(piSessionId) : undefined;
-      if (mappedContextId && !stale && !forceFullReplay) {
-        assertContextPolicy(getSystemPrompt(mappedContextId), piContext);
-      }
-      const autocompact = resolveAutocompact();
       const handoffSocketPath = options?.mcpConfig?.handoffSocket
         ? await options.mcpConfig.handoffSocket
         : undefined;
       // The proxy needs a pi session to route the continuation back to.
       const allowHandoff =
         handoffProxyAllowed() && !!piSessionId && !!handoffSocketPath;
-      // Thinking is deliberately absent: a live process takes a new level
-      // through control requests (step 1), so changing it mid-session no
-      // longer costs a respawn and a full-history replay.
+      // Everything a process was spawned with that a later call cannot change
+      // in place. Thinking is deliberately absent: a live process takes a new
+      // level through control requests (step 1), so changing it mid-session
+      // does not cost a respawn and a full-history replay.
       const signature = JSON.stringify([
         model.id,
-        systemPromptMode,
-        piContext,
-        piOwned ? context.systemPrompt : null,
+        piRequest.systemPrompt,
         cwd,
         options?.mcpConfigPath ?? null,
         options?.mcpConfig?.schemaPath ?? null,
         options?.mcpConfig?.version ?? null,
         handoffSocketPath ?? null,
-        autocompact ?? null,
         allowHandoff,
         process.env.PI_CLAUDE_CLI_SETTINGS ?? null,
       ]);
@@ -453,17 +327,10 @@ export function streamViaCli(
       if (parkedCli) {
         const checkpoint = parkedCli.piHistory;
         const historyMatches =
-          !piOwned ||
-          (!!checkpoint &&
-            messages.length >= checkpoint.length &&
-            historyHash(messages.slice(0, checkpoint.length)) ===
-              checkpoint.hash);
-        if (
-          !forceFullReplay &&
-          !stale &&
-          historyMatches &&
-          parkedCli.signature === signature
-        ) {
+          !!checkpoint &&
+          messages.length >= checkpoint.length &&
+          historyHash(messages.slice(0, checkpoint.length)) === checkpoint.hash;
+        if (!stale && historyMatches && parkedCli.signature === signature) {
           const toolResults = delta.filter((m) => m?.role === "toolResult");
           const userMessages = delta.filter((m) => m?.role === "user");
           if (parkedCli.turnActive) {
@@ -487,53 +354,23 @@ export function streamViaCli(
           mode = "spawn";
         }
         if (mode === "spawn") {
-          // Different spawn parameters, stale history, or a delta the live
-          // process cannot take: end it cleanly and start over via --resume.
+          // Different spawn parameters, a history the process has not
+          // acknowledged, or a delta it cannot take: end it and start over.
           await parkedCli.retire();
         } else {
           cli = parkedCli;
         }
       }
 
-      // ---- 2. Or spawn
-      let resumeSessionId: string | undefined;
-      let newCliId: string | undefined;
+      // ---- 2. Or spawn a fresh process and import pi's full history
       if (!cli) {
-        // One CLI session per pi session, resumed across turns and restarts.
-        // Resume only when a mapping exists AND the CLI session is not behind
-        // pi's history (a foreign-provider turn after our last one means the
-        // CLI never saw that exchange). Anything else — first turn, fork,
-        // model switch, lost sidecar, resume miss — is one reimport.
-        const mappedCliId =
-          !piOwned && piSessionId ? getCliSession(piSessionId) : undefined;
-        resumeSessionId =
-          !forceFullReplay && mappedCliId && !stale ? mappedCliId : undefined;
-        // Fresh sessions get a provider-minted id, never pi's: the CLI refuses
-        // a --session-id it has already seen, and forks reuse pi ids.
-        newCliId = resumeSessionId ? undefined : randomUUID();
-        const cliSessionId = (resumeSessionId ?? newCliId)!;
+        // A provider-minted id, never pi's: it only keys this spawn's staged
+        // prompt and MCP config, and forks reuse pi ids.
+        const cliSessionId = randomUUID();
         promptFileKey = cliSessionId;
 
-        // Resume sends only the delta since the last assistant turn (new user
-        // text, handoff tool results). Create/import sends the full history.
-        const prompt = piOwned
-          ? replayPiMessages(messages)
-          : resumeSessionId
-            ? buildResumePrompt(context)
-            : buildPrompt(context);
-        // The CLI does not keep --system-prompt across --resume, so it goes on
-        // EVERY spawn. On resume, replay the stored bytes rather than rebuilding
-        // them: an identical prompt keeps the cached prefix, a drifted one
-        // re-bills the whole transcript as cache write. See src/session-map.ts.
-        const storedSystemPrompt = resumeSessionId
-          ? getSystemPrompt(resumeSessionId)
-          : undefined;
-        const systemPrompt =
-          storedSystemPrompt ??
-          buildSystemPrompt(context, cwd, systemPromptMode);
-
         // The MCP config names this CLI session so proxied tool calls route
-        // back here. A verbatim mcpConfigPath (tests, legacy hosts) wins.
+        // back here. A verbatim mcpConfigPath (tests) wins.
         const mcpConfigPath =
           options?.mcpConfigPath ??
           (options?.mcpConfig
@@ -545,23 +382,11 @@ export function streamViaCli(
               )
             : undefined);
 
-        const proc = spawnClaude(model.id, systemPrompt || undefined, {
-          cwd,
-          signal: options?.signal,
-          thinking,
-          mcpConfigPath,
-          resumeSessionId,
-          newSessionId: newCliId,
-          systemPromptMode,
-        });
-        // Record the mapping as soon as the session exists on disk. On a turn
-        // that later errors, the mapping is cleared so the next turn reimports.
-        if (!piOwned && piSessionId && newCliId)
-          setCliSession(piSessionId, newCliId);
-        // Store the created prompt so every later turn re-passes these exact
-        // bytes. Without it, resume falls back to a rebuild that can drift.
-        if (!piOwned && newCliId && systemPrompt)
-          setSystemPrompt(newCliId, systemPrompt);
+        const proc = spawnClaude(
+          model.id,
+          piSystemPrompt(piRequest.systemPrompt ?? ""),
+          { cwd, thinking, mcpConfigPath, cliSessionId },
+        );
         const getStderr = captureStderr(proc);
         // Register in global process registry for teardown cleanup
         registerProcess(proc);
@@ -573,22 +398,18 @@ export function streamViaCli(
           getStderr,
           thinking,
         });
-        cli.writeUser(prompt);
+        cli.writeUser(replayPiMessages(messages));
       }
 
       const live = cli;
       const proc = live.proc;
 
       // ---- 3. The episode: one pi call's view of the process
-      const bridge = createEventBridge(stream, model, {
-        markedTools: live.markedTools,
-      });
-      const taskTracker = live.taskTracker;
+      const bridge = createEventBridge(stream, model);
       // Usage earlier episodes of this CLI turn already handed to pi. The
       // result's cumulative figures are reduced by this so the turn is billed
       // once across its episodes.
       const turnReportedBefore = live.turnReported;
-      // Result deltas seen by THIS episode (a sub-agent wait yields several).
       let episodeResultTotals = ZERO_USAGE;
 
       // Guard against double stream.end() and double error events.
@@ -602,48 +423,28 @@ export function streamViaCli(
         if (finished) return;
         finished = true;
         clearTimeout(inactivityTimer);
-        clearTimeout(agentWaitTimer);
         live.detach();
         resolveFinished();
       }
 
-      /**
-       * End the stream with an error, using a "done" event instead of "error".
-       *
-       * Why "done" not "error": AssistantMessageEventStream.extractResult()
-       * returns event.error (a string) for error events, but agent-loop.js
-       * then calls message.content.filter() on the result, crashing because
-       * a string has no .content property. By pushing "done" with a valid
-       * AssistantMessage (content:[]), pi gets a well-formed object.
-       */
+      /** End the stream with an error event carrying what was streamed so far. */
       function endStreamWithError(errMsg: string) {
-        if (streamEnded || resumeMiss) return;
+        if (streamEnded) return;
         streamEnded = true;
         const output = bridge.getOutput();
-        const errorMessage = {
-          ...output,
-          content: output.content?.length
-            ? output.content
-            : [{ type: "text" as const, text: `Error: ${errMsg}` }],
-          stopReason: "stop" as const,
-        };
-        stream.push(
-          piOwned
-            ? ({
-                type: "error",
-                reason: aborted ? "aborted" : "error",
-                error: {
-                  ...errorMessage,
-                  stopReason: aborted ? "aborted" : "error",
-                  errorMessage: errMsg,
-                },
-              } as any)
-            : ({
-                type: "done",
-                reason: "stop",
-                message: errorMessage,
-              } as any),
-        );
+        const reason = aborted ? "aborted" : "error";
+        stream.push({
+          type: "error",
+          reason,
+          error: {
+            ...output,
+            content: output.content?.length
+              ? output.content
+              : [{ type: "text" as const, text: `Error: ${errMsg}` }],
+            stopReason: reason,
+            errorMessage: errMsg,
+          },
+        } as any);
         stream.end();
         // An episode that failed cannot vouch for the process it was
         // attached to; end it rather than park it for the next call.
@@ -651,11 +452,8 @@ export function streamViaCli(
         finishEpisode();
       }
 
-      /** The process is not coming back: drop it from every registry. */
+      /** The process is not coming back: retire it and drop its config. */
       async function discardProcess() {
-        if (piSessionId) {
-          // Nothing to do — the pool never held it while attached.
-        }
         await live.retire();
         removeSessionMcpConfig(live.cliSessionId);
       }
@@ -678,44 +476,9 @@ export function streamViaCli(
 
       // Inactivity timeout: kill subprocess if no stdout for INACTIVITY_TIMEOUT_MS
       let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
-
-      // Sub-agent wait state (see WAIT_FOR_AGENTS): how many `result`
-      // envelopes have been treated as cycle boundaries, and the wall-clock
-      // backstop that stops waiting no matter what the agents are doing.
-      let agentContinuations = 0;
-      // Results consumed by a prompt of the CLI's own. See
-      // MAX_EMPTY_CONTINUATIONS.
-      let emptyContinuations = 0;
-      let agentWaitTimer: ReturnType<typeof setTimeout> | undefined;
-      let agentWaitExpired = false;
-      let waitingForAgents = false;
-
-      /**
-       * End the episode on what it already has, without pushing an error.
-       *
-       * Only correct once a `result` has been seen. Before that, silence means
-       * a wedged CLI and the turn has nothing — which is what the inactivity
-       * timeout's error is for.
-       */
-      function endTurnOnPartialWork() {
-        agentWaitExpired = true;
-        // Agents may still be running inside the process; a fresh process
-        // for the next turn is the safe outcome.
-        void discardProcess();
-        finishEpisode();
-      }
-
       function resetInactivityTimer() {
         if (inactivityTimer !== undefined) clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(() => {
-          // Waiting on sub-agents is the one state where silence is not a
-          // failed turn: the model already spoke and the result already
-          // landed. An agent that dies without notifying must not convert
-          // that into an error and throw the content away.
-          if (waitingForAgents) {
-            endTurnOnPartialWork();
-            return;
-          }
           forceKillProcess(proc);
           endStreamWithError(
             `Claude CLI subprocess timed out: no output for ${INACTIVITY_TIMEOUT_MS / 1000} seconds`,
@@ -723,45 +486,20 @@ export function streamViaCli(
         }, INACTIVITY_TIMEOUT_MS);
       }
 
-      // Abort = the CLI's own interrupt (keeps the session resumable), with a
-      // SIGKILL backstop in case the CLI is wedged and never emits a result.
+      // Abort ends the stream now and retires the process. pi's history is
+      // authoritative, so nothing in the CLI needs preserving: the next call
+      // imports that history into a fresh process.
       if (options?.signal) {
         abortHandler = () => {
           aborted = true;
-          selfInterrupted = true;
-          if (piOwned) {
-            endStreamWithError("Request aborted");
-            return;
-          }
-          sendInterrupt(proc);
-          const backstop = setTimeout(() => forceKillProcess(proc), 2000);
-          proc.once("close", () => clearTimeout(backstop));
+          endStreamWithError("Request aborted");
         };
 
         if (options.signal.aborted) {
           abortHandler();
-          return "ok";
+          return;
         }
         options.signal.addEventListener("abort", abortHandler, { once: true });
-      }
-
-      /**
-       * Nothing to hand pi: no content blocks and no tokens spent. Both halves
-       * matter — a model that legitimately answers with silence still bills
-       * for the call, so usage alone separates "said nothing" from "never
-       * ran".
-       */
-      function episodeIsEmpty(): boolean {
-        const output = bridge.getOutput();
-        if (output.content.length > 0) return false;
-        const u = output.usage;
-        if (!u) return true;
-        return (
-          (u.input ?? 0) === 0 &&
-          (u.output ?? 0) === 0 &&
-          (u.cacheRead ?? 0) === 0 &&
-          (u.cacheWrite ?? 0) === 0
-        );
       }
 
       /** Bill this episode from a `result`, net of what the turn already reported. */
@@ -772,7 +510,7 @@ export function streamViaCli(
           turnDelta = subUsage(processTotals, live.lastProcessTotals);
           live.lastProcessTotals = processTotals;
         } else {
-          // `usage` is per turn already (main agent only).
+          // `usage` is per turn already.
           turnDelta = usage4(r.usage);
         }
         episodeResultTotals = addUsage(episodeResultTotals, turnDelta);
@@ -790,48 +528,36 @@ export function streamViaCli(
 
       const sink: EpisodeSink = {
         onError(err) {
-          if (resumeMiss || finished) return;
+          if (finished) return;
           const stderr = live.getStderr();
           endStreamWithError(stderr || err.message);
         },
         onClose(code) {
-          if (resumeMiss || finished) return;
-          if (piOwned || (code !== 0 && code !== null)) {
-            const stderr = live.getStderr();
-            const message = stderr
+          if (finished) return;
+          // The process ended while an episode was attached and before a
+          // `result`: whatever streamed is incomplete.
+          const stderr = live.getStderr();
+          endStreamWithError(
+            stderr
               ? `Claude CLI exited with code ${code}: ${stderr.trim()}`
-              : `Claude CLI exited unexpectedly with code ${code}`;
-            endStreamWithError(message);
-            return;
-          }
-          // stdout closed without a result: end on whatever was streamed.
-          // The process is gone or going; it cannot serve another call.
-          void live.retire();
-          finishEpisode();
+              : `Claude CLI exited unexpectedly with code ${code}`,
+          );
         },
         onMessage(msg) {
-          if (resumeMiss || finished) return;
+          if (finished) return;
           // Reset inactivity timer on each line of output
           resetInactivityTimer();
 
           if (msg.type === "stream_event") {
-            // Only forward top-level events to pi's event bridge.
-            // Sub-agent events (parent_tool_use_id !== null) are internal to the CLI.
-            const isTopLevel = !(msg as any).parent_tool_use_id;
-            if (isTopLevel && !selfInterrupted) {
-              bridge.handleEvent(msg.event);
-            }
+            if (!selfInterrupted) bridge.handleEvent(msg.event);
 
-            // Track handoff tool_use blocks (top-level only). Built-ins and
-            // CLI-internal tools execute natively and must not end the episode.
             if (
-              isTopLevel &&
               msg.event.type === "content_block_start" &&
               msg.event.content_block?.type === "tool_use"
             ) {
               const toolName = msg.event.content_block.name;
               if (toolName && isHandoffClaudeTool(toolName)) {
-                sawHandoffTool = true;
+                sawToolCall = true;
                 const id = msg.event.content_block.id;
                 // The broker sees the MCP-side (unprefixed) name, so record
                 // the same form the schema server will send back.
@@ -841,16 +567,15 @@ export function streamViaCli(
             }
 
             if (
-              isTopLevel &&
               msg.event.type === "message_stop" &&
-              sawHandoffTool &&
+              sawToolCall &&
               !selfInterrupted
             ) {
               if (live.allowHandoff) {
                 // Proxied handoff: pi executes the tool while the CLI blocks
                 // on `tools/call`. Hand the turn to pi now; the next call
                 // answers the CLI on this same process. Nothing is written
-                // to the CLI, so its transcript and cached prefix stay intact.
+                // to the CLI, so its cached prefix stays intact.
                 live.turnReported = addUsage(
                   turnReportedBefore,
                   bridgeUsage4(bridge.getOutput()),
@@ -859,56 +584,13 @@ export function streamViaCli(
                 finishEpisode();
                 return;
               }
-              // Legacy handoff: ask the CLI to end the turn CLEANLY so the
-              // session file stays truthful and resumable, then wait for the
-              // result envelope. Never SIGKILL here — a kill truncates the
-              // transcript before the assistant turn is written, and every
-              // later --resume then splices in synthetic "No response
-              // requested." filler that the model eventually imitates.
+              // No proxy: ask the CLI to end the turn and wait for the result
+              // envelope. pi runs the tool; the next call imports pi's
+              // history, tool result included, into a fresh process.
               selfInterrupted = true;
               sendInterrupt(proc);
               return;
             }
-          } else if (
-            msg.type === "system" &&
-            (msg as any).subtype === "compact_boundary"
-          ) {
-            // The CLI compacted its own session and will carry on by itself.
-            // The host needs two things from it: the context is now the
-            // compacted size (the bridge resets its latch — otherwise pi is
-            // told the pre-compaction figure and compacts its own record on
-            // it), and the transcript should show where the cut happened.
-            if (!selfInterrupted) bridge.handleCompactBoundary(msg as any);
-          } else if (
-            msg.type === "system" &&
-            isTaskSubtype((msg as any).subtype)
-          ) {
-            // Sub-agent lifecycle. The agents' own envelopes carry
-            // parent_tool_use_id and stay internal to the CLI, but these arrive
-            // at top level even for deeply nested agents — the one channel that
-            // makes a fan-out visible at all (#23).
-            if (!selfInterrupted) {
-              const marker = taskTracker.apply(msg as any);
-              if (marker) bridge.appendMarker(marker);
-              try {
-                options?.onTaskProgress?.(taskTracker.snapshot());
-              } catch {
-                /* a status push must never break a turn */
-              }
-            }
-          } else if (msg.type === "assistant") {
-            // Complete-block envelopes: marker text for the CLI's own tool
-            // executions (built-ins, WebSearch, user MCP, …), which in observer
-            // mode is every tool except handoffs.
-            if (!selfInterrupted) bridge.handleAssistantEnvelope(msg as any);
-          } else if (msg.type === "user") {
-            // Tool results the CLI feeds back between cycles. Internal by
-            // default; with PI_CLAUDE_CLI_TOOL_RESULTS=1 the bridge forwards
-            // each one as a `result` marker paired to its call marker. Frozen
-            // after an interrupt like every other content path.
-            if (!selfInterrupted) bridge.handleUserEnvelope(msg as any);
-          } else if (msg.type === "control_request") {
-            // Answered by CliProcess (it must be, attached or not).
           } else if (msg.type === "result") {
             const r: any = msg as any;
             const isError =
@@ -925,93 +607,29 @@ export function streamViaCli(
                 (Array.isArray(r.errors) && r.errors.length > 0
                   ? r.errors.join("; ")
                   : `Claude CLI returned ${r.subtype ?? "non-success result"}`);
-              if (
-                resumeSessionId &&
-                /No conversation found with session ID/i.test(errMsg)
-              ) {
-                // Recoverable: the sidecar pointed at a CLI session that no
-                // longer exists. Clear it; the driver reimports once.
-                if (piSessionId) clearCliSession(piSessionId);
-                clearSystemPrompt(resumeSessionId);
-                resumeMiss = true;
-                void discardProcess();
-                finishEpisode();
-                return;
-              }
-              // A failed turn may leave the CLI session ending on a user
-              // entry; resuming that would splice filler. Reimport next turn.
-              if (piSessionId) clearCliSession(piSessionId);
-              // This CLI session will never be resumed, so its stored prompt
-              // is dead weight.
-              clearSystemPrompt(live.cliSessionId);
               void discardProcess();
               endStreamWithError(errMsg);
               return;
             }
             // Authoritative episode usage. After a self-interrupt the result
             // is `error_during_execution` BY DESIGN — the turn content (the
-            // handoff toolCall) is already accumulated; usage still applies.
+            // toolCall) is already accumulated; usage still applies.
             applyResultUsage(r);
 
-            // The CLI answered a queued prompt of its own (see
-            // MAX_EMPTY_CONTINUATIONS): nothing was said and nothing was
-            // spent, and our prompt is still waiting. Keep reading; the turn
-            // is still live for the process.
-            if (
-              !isError &&
-              !selfInterrupted &&
-              !aborted &&
-              emptyContinuations < MAX_EMPTY_CONTINUATIONS &&
-              episodeIsEmpty()
-            ) {
-              emptyContinuations++;
-              live.resumeTurn();
-              resetInactivityTimer();
-              return;
-            }
-
-            // Sub-agents still working: this result ends a CYCLE, not the
-            // episode. Leave the CLI alive and keep reading — it re-invokes the
-            // model itself once they report, and emits another result. See
-            // WAIT_FOR_AGENTS for the capture this is built on.
-            if (
-              WAIT_FOR_AGENTS &&
-              !isError &&
-              !selfInterrupted &&
-              !aborted &&
-              !agentWaitExpired &&
-              agentContinuations < MAX_AGENT_CONTINUATIONS &&
-              taskTracker.pendingAgents() > 0
-            ) {
-              agentContinuations++;
-              waitingForAgents = true;
-              live.resumeTurn();
-              if (agentWaitTimer === undefined) {
-                agentWaitTimer = setTimeout(() => {
-                  // Give up waiting, but let the turn end on its own content:
-                  // the launch markers and whatever the model already said are
-                  // real, and an error here would throw them away.
-                  endTurnOnPartialWork();
-                }, AGENT_WAIT_TIMEOUT_MS);
-                // A pending wait must never hold the host process open.
-                agentWaitTimer.unref?.();
-              }
-              resetInactivityTimer();
-              return;
-            }
-
             // The turn is over. The process stays for the session's next
-            // call unless the turn was interrupted for a legacy handoff (the
-            // CLI transcript then ends on a rejected tool; only --resume with
-            // the result pasted in can continue it).
+            // call unless the turn was interrupted: its conversation then
+            // ends on a rejected tool that only pi's history can continue.
             live.turnReported = ZERO_USAGE;
-            if (selfInterrupted && !aborted) {
+            if (selfInterrupted) {
               void live.retire();
             } else {
               releaseProcess("turn-end");
             }
             finishEpisode();
           }
+          // control_request is answered by CliProcess (attached or not).
+          // Every other envelope (rate_limit_event, system, assistant, user)
+          // carries nothing pi's stream needs.
         },
       };
 
@@ -1029,24 +647,18 @@ export function streamViaCli(
           );
         }
       } else if (mode === "turn") {
-        live.writeUser(
-          piOwned ? replayPiMessages(delta) : buildResumePrompt(context),
-        );
+        live.writeUser(replayPiMessages(delta));
       }
 
       await finishedPromise;
 
-      if (resumeMiss) return "resume-miss";
-
-      // Push done after the episode ends (async). Pushing synchronously
-      // inside handleMessageStop prevents pi from executing tools.
-      // Guard with streamEnded to avoid pushing done after an error was already pushed.
+      // Push done after the episode ends (async): pushing it synchronously
+      // inside the message_stop handler prevents pi from executing tools.
       if (!streamEnded) {
         const output = bridge.getOutput();
 
-        // If stopReason is toolUse but there are no pi-known tool calls in content,
-        // it means only user MCP tools were called (filtered by event bridge).
-        // Override to "stop" so pi doesn't try to execute non-existent tools.
+        // stopReason toolUse with no toolCall block would send pi looking for
+        // a tool that is not there.
         const piToolCalls = (output.content || []).filter(
           (c: any) => c.type === "toolCall",
         );
@@ -1055,13 +667,13 @@ export function streamViaCli(
             ? "stop"
             : output.stopReason;
 
-        if (piOwned) {
-          const acknowledged = [...messages, output];
-          live.piHistory = {
-            length: acknowledged.length,
-            hash: historyHash(acknowledged),
-          };
-        }
+        // What the process has now acknowledged of pi's history; the next
+        // call may reuse it only if its history extends exactly this.
+        const acknowledged = [...messages, output];
+        live.piHistory = {
+          length: acknowledged.length,
+          hash: historyHash(acknowledged),
+        };
         streamEnded = true;
         stream.push({
           type: "done",
@@ -1075,69 +687,20 @@ export function streamViaCli(
         });
         stream.end();
       }
-      return "ok";
     } finally {
-      // Clean up this attempt's abort listener
+      // Clean up this call's abort listener
       if (options?.signal && abortHandler) {
         options.signal.removeEventListener("abort", abortHandler);
       }
-      // Staged prompt file is per CLI session, so it is removed here where
-      // the ids are in scope — a resume-miss retry stages a second one. The
-      // CLI read it at spawn; a parked process no longer needs it.
+      // The CLI read the staged prompt file at spawn; a parked process no
+      // longer needs it.
       if (promptFileKey) cleanupSystemPromptFile(promptFileKey);
     }
   }
 
-  (async () => {
-    try {
-      const outcome = await runOnce(false);
-      if (outcome === "resume-miss") {
-        console.error(
-          "[pi-claude-cli] CLI session missing for --resume — importing pi history into a fresh CLI session",
-        );
-        await runOnce(true);
-      }
-    } catch (err: any) {
-      if (piOwned) {
-        failPiRequest(err.message ?? "Unexpected error in streamViaCli");
-        return;
-      }
-      if (err instanceof ContextPolicyError) {
-        // pi's stream result must be an AssistantMessage, not a raw error
-        // string (agent-loop inspects .content even when a call failed).
-        const message = createEventBridge(stream, model).getOutput();
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: {
-            ...message,
-            content: [{ type: "text", text: err.message }],
-            stopReason: "error",
-            errorMessage: err.message,
-          },
-        } as any);
-        stream.end();
-        return;
-      }
-      stream.push({
-        type: "error",
-        reason: "error",
-        error: err.message ?? "Unexpected error in streamViaCli",
-      } as any);
-      stream.end();
-    } finally {
-      // The sub-agent channel is state ABOUT a turn, so it must not outlive
-      // one. Left standing, the last snapshot pins whatever the agents were
-      // doing when the episode ended — a host then shows "running" for
-      // agents that finished, or for agents that died, until the next turn
-      // happens to publish something else.
-      try {
-        options?.onTaskProgress?.({ tasks: [], active: 0, completed: 0 });
-      } catch {
-        /* a status push must never break a turn */
-      }
-    }
-  })();
+  runEpisode().catch((err: any) => {
+    failRequest(err?.message ?? "Unexpected error in streamViaCli");
+  });
 
   return stream;
 }

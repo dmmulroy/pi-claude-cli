@@ -11,50 +11,6 @@ on:
     - cron: "17 6 * * 1"
 
 jobs:
-  # Catches the mistake BEFORE merge: shipping code without bumping the
-  # version. The publish workflow only releases a version npm does not have,
-  # so a code merge that forgets the bump goes green and ships nothing —
-  # exactly how observer mode (#17) sat unreleased while users kept hitting
-  # the bug it fixed. A warning, not a failure: stacking several PRs and
-  # releasing once is a legitimate flow.
-  release-reminder:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Warn if shipped code changed without a version bump
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          # Only the files npm actually ships (package.json "files").
-          CODE_CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- index.ts src/ | wc -l)
-          BASE_VERSION=$(git show "$BASE_SHA:package.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")
-          HEAD_VERSION=$(node -p "require('./package.json').version")
-
-          if [ "$CODE_CHANGED" -gt 0 ] && [ "$BASE_VERSION" = "$HEAD_VERSION" ]; then
-            echo "::warning title=No version bump::This PR changes shipped code (index.ts / src/) but leaves package.json at $HEAD_VERSION. Merging will publish NOTHING. Bump the version here if this should ship."
-            {
-              echo "### Heads up: this PR will not release"
-              echo
-              echo "It changes shipped code but leaves \`package.json\` at **$HEAD_VERSION**, which is already released."
-              echo
-              echo "To ship it, bump the version in this PR:"
-              echo
-              echo '```bash'
-              echo "npm version patch --no-git-tag-version   # or minor / major"
-              echo '```'
-              echo
-              echo "Leave it alone if you are stacking PRs and releasing separately."
-            } >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$CODE_CHANGED" -gt 0 ]; then
-            echo "::notice title=Version bumped::$BASE_VERSION -> $HEAD_VERSION. Merging this will publish."
-          else
-            echo "No shipped code changed; no version bump needed."
-          fi
-
   lint:
     runs-on: ubuntu-latest
     steps:

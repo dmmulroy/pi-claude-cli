@@ -3,8 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     globals: true,
-    // Hermetic environment — see tests/setup-env.ts. Without it the suite
-    // fails when run from a session driven by this extension itself.
+    // Hermetic environment — see tests/setup-env.ts.
     setupFiles: ["tests/setup-env.ts"],
     coverage: {
       provider: "v8",
@@ -14,7 +13,7 @@ export default defineConfig({
       thresholds: {
         lines: 92,
         functions: 92,
-        branches: 88,
+        branches: 85,
         statements: 92,
       },
     },

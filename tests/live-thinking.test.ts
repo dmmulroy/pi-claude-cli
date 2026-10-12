@@ -172,7 +172,6 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")(
           cwd: dir,
           env: {
             PI_CODING_AGENT_DIR: join(dir, "agent"),
-            PI_CLAUDE_CLI_CONTEXT: "pi",
             PI_CLAUDE_CLI_STATE_DIR: join(dir, "state"),
             ANTHROPIC_BASE_URL: proxy.url,
             PATH: `${spawns.bin}:${process.env.PATH}`,
@@ -254,7 +253,6 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")(
         cwd: dir,
         env: {
           PI_CODING_AGENT_DIR: join(dir, "agent"),
-          PI_CLAUDE_CLI_CONTEXT: "pi",
           PI_CLAUDE_CLI_STATE_DIR: join(dir, "state"),
           ANTHROPIC_BASE_URL: proxy.url,
           PATH: `${spawns.bin}:${process.env.PATH}`,
