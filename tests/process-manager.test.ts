@@ -39,6 +39,8 @@ import {
   registerProcess,
   killAllProcesses,
   cleanupSystemPromptFile,
+  STDERR_CAPTURE_LIMIT_CHARS,
+  SUBSCRIPTION_OVERRIDE_ENV_VARS,
 } from "../src/process-manager";
 
 describe("spawnClaude", () => {
@@ -349,6 +351,51 @@ describe("captureStderr", () => {
 
     const getStderr = captureStderr(proc);
     expect(getStderr()).toBe("");
+  });
+
+  it("keeps only the most recent output of a long-lived process", () => {
+    const EventEmitter = require("node:events");
+    const stderr = new EventEmitter();
+    const proc = { stderr } as unknown as ChildProcess;
+
+    const getStderr = captureStderr(proc);
+    stderr.emit("data", Buffer.from("x".repeat(STDERR_CAPTURE_LIMIT_CHARS)));
+    stderr.emit("data", Buffer.from("the failure that matters"));
+
+    expect(getStderr()).toHaveLength(STDERR_CAPTURE_LIMIT_CHARS);
+    expect(getStderr().endsWith("the failure that matters")).toBe(true);
+  });
+});
+
+describe("spawnClaude environment", () => {
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (execSync as any).mockReturnValue(Buffer.from("2.1.292 (Claude Code)"));
+    for (const name of SUBSCRIPTION_OVERRIDE_ENV_VARS) {
+      saved[name] = process.env[name];
+    }
+  });
+  afterEach(() => {
+    for (const name of SUBSCRIPTION_OVERRIDE_ENV_VARS) {
+      if (saved[name] === undefined) delete process.env[name];
+      else process.env[name] = saved[name];
+    }
+  });
+
+  it("never forwards variables that move the CLI off the subscription login", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test";
+    process.env.ANTHROPIC_AUTH_TOKEN = "token";
+    process.env.ANTHROPIC_BASE_URL = "https://gateway.example";
+
+    spawnClaude("claude-sonnet-4-5-20250929");
+
+    const { env } = (spawn as any).mock.calls[0][2];
+    for (const name of SUBSCRIPTION_OVERRIDE_ENV_VARS) {
+      expect(env).not.toHaveProperty(name);
+    }
+    // The host process keeps its own environment untouched.
+    expect(process.env.ANTHROPIC_API_KEY).toBe("sk-ant-test");
   });
 });
 

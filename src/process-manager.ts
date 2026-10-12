@@ -55,6 +55,23 @@ function isStrictMcp(): boolean {
 /** One hour: the MCP tool-call timeout handed to the CLI when unset. */
 export const DEFAULT_MCP_TOOL_TIMEOUT_MS = 3_600_000;
 
+/**
+ * Environment variables that redirect the CLI away from its subscription
+ * login. Never forwarded to the Claude subprocess.
+ */
+export const SUBSCRIPTION_OVERRIDE_ENV_VARS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+] as const;
+
+/**
+ * Ceiling on captured stderr. A parked process lives for hours; its stderr is
+ * only ever read to explain a failure, so the most recent output is what
+ * matters and the rest must not grow without bound.
+ */
+export const STDERR_CAPTURE_LIMIT_CHARS = 64 * 1024;
+
 function systemPromptFilePath(sessionKey?: string): string {
   // In the private 0700 runtime directory, written 0600: the prompt carries
   // pi's instructions and the host's project context, which used to sit in a
@@ -246,6 +263,10 @@ export function spawnClaude(
       ENABLE_TOOL_SEARCH: "false",
     });
   }
+  // An exported API key, auth token or gateway URL silently moves the CLI off
+  // the subscription login this provider exists to use: turns then bill an
+  // API account, or fail against a gateway that was meant for another tool.
+  for (const name of SUBSCRIPTION_OVERRIDE_ENV_VARS) delete env[name];
   if (!env.MCP_TOOL_TIMEOUT)
     env.MCP_TOOL_TIMEOUT = String(DEFAULT_MCP_TOOL_TIMEOUT_MS);
 
@@ -375,12 +396,17 @@ export function cleanupProcess(proc: ChildProcess): void {
  * Attach a data listener to stderr and accumulate output into a buffer.
  *
  * @param proc - The Claude subprocess
- * @returns A function that returns the accumulated stderr string
+ * Keeps only the most recent STDERR_CAPTURE_LIMIT_CHARS characters.
+ *
+ * @returns A function that returns the captured stderr tail
  */
 export function captureStderr(proc: ChildProcess): () => string {
   let buffer = "";
   proc.stderr!.on("data", (data: Buffer) => {
     buffer += data.toString();
+    if (buffer.length > STDERR_CAPTURE_LIMIT_CHARS) {
+      buffer = buffer.slice(-STDERR_CAPTURE_LIMIT_CHARS);
+    }
   });
   return () => buffer;
 }
