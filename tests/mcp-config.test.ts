@@ -214,7 +214,7 @@ describe("writeMcpConfig", () => {
 
     // First writeFileSync call is the schema file
     const schemaCall = mocks.writeFileSync.mock.calls[0];
-    expect(schemaCall[0]).toMatch(/mcp-schemas\.json$/);
+    expect(schemaCall[0]).toMatch(/mcp-schemas-[0-9a-f]+\.json$/);
     expect(JSON.parse(schemaCall[1])).toEqual(toolDefs);
     expectOwnerOnly(schemaCall);
   });
@@ -299,7 +299,7 @@ describe("writeMcpConfig", () => {
       "mcp-schema-server.cjs",
     );
     // Second arg should be the schema file path
-    expect(server.args[1]).toMatch(/mcp-schemas\.json$/);
+    expect(server.args[1]).toMatch(/mcp-schemas-[0-9a-f]+\.json$/);
   });
 
   it("returns the config file path", () => {
@@ -349,7 +349,7 @@ describe("writeMcpConfig refresh", () => {
 
     expect(second.changed).toBe(true);
     const schemaWrites = mocks.writeFileSync.mock.calls.filter(
-      (call: unknown[]) => /mcp-schemas\.json$/.test(String(call[0])),
+      (call: unknown[]) => /mcp-schemas-[0-9a-f]+\.json$/.test(String(call[0])),
     );
     expect(schemaWrites).toHaveLength(1);
     expect(JSON.parse(String(schemaWrites[0][1]))[0].description).toBe(
@@ -357,17 +357,17 @@ describe("writeMcpConfig refresh", () => {
     );
   });
 
-  it("keeps a stable path across refreshes so temp files never accumulate", () => {
-    const first = writeMcpConfig(defs("a"));
-    const second = writeMcpConfig(defs("b"));
+  it("gives each tool surface its own file so concurrent requests cannot clobber each other", () => {
+    writeMcpConfig(defs("a"));
+    writeMcpConfig(defs("b"));
+    writeMcpConfig(defs("a"));
 
-    expect(second.configPath).toBe(first.configPath);
-    const schemaPaths = new Set(
-      mocks.writeFileSync.mock.calls
-        .map((call: unknown[]) => String(call[0]))
-        .filter((path: string) => /mcp-schemas\.json$/.test(path)),
-    );
-    expect(schemaPaths.size).toBe(1);
+    const schemaPaths = mocks.writeFileSync.mock.calls
+      .map((call: unknown[]) => String(call[0]))
+      .filter((path: string) => /mcp-schemas-[0-9a-f]+\.json$/.test(path));
+    // Two surfaces, two files, each written exactly once.
+    expect(schemaPaths).toHaveLength(2);
+    expect(new Set(schemaPaths).size).toBe(2);
   });
 
   it("writes the config file once, not on every refresh", () => {
@@ -401,9 +401,9 @@ describe("cleanupMcpConfigFiles", () => {
     const removed = mocks.unlinkSync.mock.calls.map((call: unknown[]) =>
       String(call[0]),
     );
-    expect(removed.some((p: string) => /mcp-schemas\.json$/.test(p))).toBe(
-      true,
-    );
+    expect(
+      removed.some((p: string) => /mcp-schemas-[0-9a-f]+\.json$/.test(p)),
+    ).toBe(true);
     expect(removed.some((p: string) => /mcp-config[^/]*\.json$/.test(p))).toBe(
       true,
     );
@@ -508,7 +508,7 @@ describe("writeSessionMcpConfig", () => {
     expect(mocks.unlinkSync).toHaveBeenCalledWith(b);
   });
 
-  it("writeSchemaFile bumps the version only when the surface changes", async () => {
+  it("writeSchemaFile identifies a surface by content, not by write order", async () => {
     const { writeSchemaFile } = await import("../src/mcp-config");
     const defs = (d: string): McpToolDef[] => [
       { name: "t", description: d, inputSchema: {} },
@@ -516,8 +516,15 @@ describe("writeSessionMcpConfig", () => {
     const a = writeSchemaFile(defs("one"));
     const b = writeSchemaFile(defs("one"));
     const c = writeSchemaFile(defs("two"));
+    // A tool-less request interleaved with the main turn (upstream #49) must
+    // hand the main turn back the path and version it started with.
+    const d = writeSchemaFile(defs("one"));
     expect(a).toMatchObject({ changed: true, version: 1 });
     expect(b).toMatchObject({ changed: false, version: 1 });
     expect(c).toMatchObject({ changed: true, version: 2 });
+    expect(d).toMatchObject({ changed: false, version: 1 });
+    expect(b.schemaPath).toBe(a.schemaPath);
+    expect(d.schemaPath).toBe(a.schemaPath);
+    expect(c.schemaPath).not.toBe(a.schemaPath);
   });
 });

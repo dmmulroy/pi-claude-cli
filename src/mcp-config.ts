@@ -8,11 +8,16 @@
  * register and unregister tools at runtime — pi-mcp-adapter re-registers its
  * `mcp` gateway with a new description every time an MCP server is added,
  * enabled or disabled — so a snapshot taken at the first turn goes stale for
- * the rest of the session. The schema file keeps a stable per-process path,
- * so refreshing rewrites in place instead of accumulating files; every
- * rewrite bumps `version` so a parked CLI process spawned against the old
- * surface can be retired (its tool list is what the CLI advertised at
- * connect time).
+ * the rest of the session. Schema files are content-addressed: each distinct
+ * tool surface gets its own file named by a hash of its JSON, and a file is
+ * never rewritten. A request therefore always spawns against exactly the
+ * surface it asked for, even when another request with a different surface
+ * (a tool-less title-generation call, say) runs at the same moment. A shared
+ * path rewritten in place let that second request clobber the first one's
+ * tools before its schema server had read them (upstream issue #49).
+ * `version` identifies the surface, so a parked CLI process spawned against
+ * a different one can be retired (its tool list is what the CLI advertised
+ * at connect time).
  *
  * Config files are per CLI session: each carries the session id so the
  * schema server can route proxied `tools/call` requests back to the right pi
@@ -25,6 +30,7 @@
  */
 
 import { writeFileSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runtimeFile, RUNTIME_FILE_MODE } from "./runtime-dir.js";
@@ -57,13 +63,18 @@ export interface McpConfigWrite {
 export interface SchemaFileWrite {
   schemaPath: string;
   changed: boolean;
-  /** Increments on every rewrite; 1 after the first write. */
+  /**
+   * Identifies the tool surface: equal surfaces get equal versions, distinct
+   * surfaces distinct ones. Numbered in first-seen order, starting at 1.
+   */
   version: number;
 }
 
-/** Serialized tool defs as of the last write, for change detection. */
-let lastSchemaJson: string | undefined;
-let schemaVersion = 0;
+/** Every tool surface staged so far, by content hash. Never rewritten. */
+const stagedSchemas = new Map<
+  string,
+  { schemaPath: string; version: number }
+>();
 /** The legacy per-process config file's content never varies: written once. */
 let configWritten = false;
 /** Per-session config files this process wrote, for exit cleanup. */
@@ -91,9 +102,9 @@ export function getCustomToolDefs(pi: any): McpToolDef[] {
     }));
 }
 
-/** Where this process stages the tool schemas the CLI advertises. */
-function schemaFilePath(): string {
-  return runtimeFile("mcp-schemas.json");
+/** Where this process stages one tool surface, named by its content hash. */
+function schemaFilePath(contentHash: string): string {
+  return runtimeFile(`mcp-schemas-${contentHash}.json`);
 }
 
 /** Where this process stages the legacy (session-less) `--mcp-config` file. */
@@ -119,18 +130,25 @@ function serverPath(): string {
 }
 
 /**
- * Stage the tool schemas. Safe to call on every turn: the file is only
- * rewritten when the tool surface actually changed.
+ * Stage the tool schemas. Safe to call on every request, including
+ * concurrent requests with different tool surfaces: each surface is written
+ * once to its own content-addressed file and never touched again.
+ *
+ * `changed` is true the first time this process sees a surface.
  */
 export function writeSchemaFile(toolDefs: McpToolDef[]): SchemaFileWrite {
   const schemaJson = JSON.stringify(toolDefs);
-  const changed = schemaJson !== lastSchemaJson;
-  if (changed) {
-    writeFileSync(schemaFilePath(), schemaJson, { mode: RUNTIME_FILE_MODE });
-    lastSchemaJson = schemaJson;
-    schemaVersion++;
-  }
-  return { schemaPath: schemaFilePath(), changed, version: schemaVersion };
+  const contentHash = createHash("sha256")
+    .update(schemaJson)
+    .digest("hex")
+    .slice(0, 32);
+  const staged = stagedSchemas.get(contentHash);
+  if (staged) return { ...staged, changed: false };
+  const schemaPath = schemaFilePath(contentHash);
+  writeFileSync(schemaPath, schemaJson, { mode: RUNTIME_FILE_MODE });
+  const entry = { schemaPath, version: stagedSchemas.size + 1 };
+  stagedSchemas.set(contentHash, entry);
+  return { ...entry, changed: true };
 }
 
 /**
@@ -214,11 +232,12 @@ export function removeSessionMcpConfig(cliSessionId: string): void {
  */
 export function cleanupMcpConfigFiles(): void {
   const paths = [
-    schemaFilePath(),
+    ...[...stagedSchemas.values()].map((staged) => staged.schemaPath),
     configFilePath(),
     ...sessionConfigPaths.values(),
   ];
   sessionConfigPaths.clear();
+  stagedSchemas.clear();
   for (const path of paths) {
     try {
       unlinkSync(path);
@@ -230,8 +249,7 @@ export function cleanupMcpConfigFiles(): void {
 
 /** Test seam: forget what this process has already written. */
 export function resetMcpConfigCache(): void {
-  lastSchemaJson = undefined;
-  schemaVersion = 0;
+  stagedSchemas.clear();
   configWritten = false;
   sessionConfigPaths.clear();
 }
