@@ -1,0 +1,692 @@
+/**
+ * Scenario runner: the gate for the provider's Effect services.
+ *
+ *   node scripts/scenarios.ts                 run every stub scenario
+ *   node scripts/scenarios.ts warm-turn ...   run the named ones
+ *   node scripts/scenarios.ts --list
+ *   node scripts/scenarios.ts --live          also run the live scenario
+ *                                             (spends subscription tokens)
+ *
+ * A scenario runs real provider code against the stub CLI under `trace run`,
+ * then checks the recorded trace with `trace assert`. It passes when the
+ * command exits zero and every assertion holds. `--keep` leaves the trace
+ * files in place and prints their paths.
+ */
+
+import { delimiter } from "node:path";
+import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
+import * as NodeStdio from "@effect/platform-node-shared/NodeStdio";
+import * as NodeTerminal from "@effect/platform-node-shared/NodeTerminal";
+import {
+  Console,
+  Data,
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Runtime,
+  Stream,
+} from "effect";
+import { Argument, Command, Flag } from "effect/cli";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { crossSpawnSpawnerLayer } from "../src/cross-spawn-spawner.ts";
+import { nodeFileSystemLayer } from "../src/node-platform.ts";
+
+/** One or more scenarios did not pass. */
+class ScenariosFailed extends Data.TaggedError("ScenariosFailed")<{
+  readonly names: ReadonlyArray<string>;
+}> {
+  readonly [Runtime.errorExitCode] = 1;
+}
+
+/** What a scenario runs: the driver, real pi in print mode, or a script. */
+type ScenarioCommand =
+  | { readonly _tag: "Driver" }
+  | { readonly _tag: "Pi"; readonly prompt: string }
+  | { readonly _tag: "Script"; readonly path: string };
+
+interface Scenario {
+  readonly name: string;
+  readonly about: string;
+  readonly command: ScenarioCommand;
+  /** Extra environment for the run. */
+  readonly env: Readonly<Record<string, string>>;
+  /** Each entry is the arguments of one `trace assert`. */
+  readonly asserts: ReadonlyArray<ReadonlyArray<string>>;
+  /** Spends subscription tokens; only with `--live`. */
+  readonly live: boolean;
+}
+
+const scenario = (
+  name: string,
+  about: string,
+  asserts: ReadonlyArray<ReadonlyArray<string>>,
+  options: {
+    readonly env?: Readonly<Record<string, string>>;
+    readonly command?: ScenarioCommand;
+    readonly live?: boolean;
+  } = {},
+): Scenario => ({
+  name,
+  about,
+  asserts: [...asserts, ["--no-open"]],
+  env: options.env ?? {},
+  command: options.command ?? { _tag: "Driver" },
+  live: options.live ?? false,
+});
+
+const episode = (...attrs: ReadonlyArray<string>) => [
+  "--name",
+  "episode",
+  ...attrs.flatMap((attr) => ["--attr", attr]),
+];
+const span = (name: string, ...attrs: ReadonlyArray<string>) => [
+  "--name",
+  name,
+  ...attrs.flatMap((attr) => ["--attr", attr]),
+];
+const count = (n: number) => ["--count", String(n)];
+
+const SCENARIOS: ReadonlyArray<Scenario> = [
+  scenario(
+    "trace-sink",
+    "the sink records starts, ends, events and the three statuses",
+    [
+      [...episode(), ...count(3)],
+      [...episode("outcome=done"), "--status", "ok", ...count(1)],
+      [...episode("outcome=error"), "--status", "error", ...count(1)],
+      [...episode("mode=turn"), "--status", "interrupted", ...count(1)],
+      [
+        ...span("ClaudeCli.spawn", "pid=4242"),
+        "--under",
+        "episode[mode=spawn]",
+        "--event",
+        "spawned",
+        ...count(2),
+        "--max-ms",
+        "500",
+      ],
+      [
+        "--order",
+        "episode[outcome=done],episode[outcome=error]:end,episode[mode=turn]",
+      ],
+    ],
+    { command: { _tag: "Script", path: "scripts/scenarios/trace-sample.ts" } },
+  ),
+  scenario(
+    "fresh-spawn",
+    "a first call launches a process, streams, and parks it",
+    [
+      [
+        ...episode("mode=spawn", "outcome=done", "spawnReason=noParked"),
+        ...count(1),
+      ],
+      [...span("ClaudeCli.spawn"), "--under", "episode", ...count(1)],
+      [...span("ClaudeProcessPool.park", "idleMs=600000"), ...count(1)],
+      [...span("ProviderRuntime.build", "toolBridge=inband"), ...count(1)],
+      [...span("ClaudeProcess"), "--status", "ok", ...count(1)],
+    ],
+  ),
+  scenario(
+    "warm-turn",
+    "a follow-up reuses the parked process and sends only the new turn",
+    [
+      [...episode(), ...count(2), "--same", "pid"],
+      [...episode("mode=spawn"), ...count(1)],
+      [...episode("mode=turn", "outcome=done"), ...count(1)],
+      [...span("ClaudeCli.spawn"), ...count(1)],
+      [...span("ClaudeProcessPool.take", "hit=true"), ...count(1)],
+      ["--order", "episode[mode=spawn],episode[mode=turn]"],
+    ],
+  ),
+  scenario(
+    "tool-handoff",
+    "a tool call is held open while pi runs the tool, then answered in-process",
+    [
+      [...episode(), ...count(2), "--same", "pid"],
+      [...episode("mode=spawn", "outcome=toolUse"), ...count(1)],
+      [...episode("mode=handoff", "outcome=done"), ...count(1)],
+      [...span("ClaudeProcessPool.park", "idleMs=1800000"), ...count(1)],
+      [
+        ...span("toolCall", "tool=read", "outcome=ok"),
+        "--status",
+        "ok",
+        ...count(1),
+      ],
+      [...span("toolCall"), "--under", "ClaudeProcess", ...count(1)],
+      [...span("ClaudeCli.spawn"), ...count(1)],
+      [
+        "--order",
+        "episode[outcome=toolUse]:end,episode[mode=handoff],toolCall:end,episode[mode=handoff]:end",
+      ],
+    ],
+  ),
+  scenario(
+    "tool-abandoned",
+    "a new user message instead of the tool result retires the blocked process",
+    [
+      [...episode("mode=spawn", "spawnReason=handoffMismatch"), ...count(1)],
+      [
+        ...span("ClaudeProcess.retire", "cause=history", "ended=exited"),
+        ...count(1),
+        "--max-ms",
+        "1500",
+      ],
+      [...span("toolCall"), "--status", "interrupted", ...count(1)],
+      [...span("ClaudeCli.spawn"), ...count(2)],
+    ],
+  ),
+  scenario(
+    "handoff-proxy-off",
+    "with the proxy off the turn is interrupted at the tool call and reimported",
+    [
+      [...episode("outcome=toolUse", "mode=spawn"), ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=interrupted"), ...count(1)],
+      [...episode("outcome=done", "spawnReason=noParked"), ...count(1)],
+      [...span("toolCall"), "--max-count", "0"],
+      [...span("ClaudeCli.spawn"), ...count(2)],
+    ],
+    { env: { PI_CLAUDE_CLI_HANDOFF_PROXY: "0" } },
+  ),
+  scenario(
+    "changed-history",
+    "an edited history retires the process and imports pi's history afresh",
+    [
+      [...episode("mode=spawn", "spawnReason=history"), ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=history"), ...count(1)],
+      [...episode(), ...count(2), "--distinct", "pid"],
+    ],
+  ),
+  scenario("changed-prompt", "a changed system prompt retires the process", [
+    [...episode("mode=spawn", "spawnReason=signature.prompt"), ...count(1)],
+    [...span("ClaudeProcess.retire", "cause=signature"), ...count(1)],
+    [...episode(), ...count(2), "--distinct", "pid"],
+  ]),
+  scenario("changed-tools", "a changed tool surface retires the process", [
+    [...episode("mode=spawn", "spawnReason=signature.tools"), ...count(1)],
+    [...span("ClaudeProcess.retire", "cause=signature"), ...count(1)],
+    [...episode(), ...count(2), "--distinct", "pid"],
+  ]),
+  scenario(
+    "foreign-provider",
+    "a turn answered by another provider retires the process",
+    [
+      [...episode("mode=spawn", "spawnReason=foreignProvider"), ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=history"), ...count(1)],
+      [...episode(), ...count(2), "--distinct", "pid"],
+    ],
+  ),
+  scenario(
+    "thinking-change",
+    "a new thinking level is applied to the live process",
+    [
+      [
+        ...span(
+          "ClaudeProcess.applyThinking",
+          "acknowledged=true",
+          "from=disabled",
+          "to=enabled",
+          "controls=2",
+        ),
+        ...count(1),
+      ],
+      [...episode("mode=turn"), ...count(1)],
+      [...span("ClaudeCli.spawn"), ...count(1)],
+      [...episode(), ...count(2), "--same", "pid"],
+    ],
+  ),
+  scenario(
+    "thinking-refused",
+    "a refused thinking change falls back to a fresh process",
+    [
+      [
+        ...span("ClaudeProcess.applyThinking", "acknowledged=false"),
+        ...count(1),
+      ],
+      [...episode("mode=spawn", "spawnReason=thinking"), ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=thinking"), ...count(1)],
+      [...span("ClaudeCli.spawn"), ...count(2)],
+    ],
+    { env: { CLAUDE_STUB_REFUSE_CONTROL: "1" } },
+  ),
+  scenario(
+    "abort-mid-stream",
+    "an abort ends the stream at once and retires the process afterwards",
+    [
+      [...episode("outcome=aborted"), "--status", "interrupted", ...count(1)],
+      [
+        ...span("ClaudeProcess.retire", "cause=abort", "ended=exited"),
+        ...count(1),
+        "--max-ms",
+        "1500",
+      ],
+      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+      [...episode("wire.stream_event=3"), ...count(1)],
+      [
+        "--order",
+        "episode[outcome=aborted]:end,ClaudeProcess.retire[cause=abort]:end",
+      ],
+    ],
+  ),
+  scenario(
+    "abort-during-launch",
+    "an abort that lands while the CLI is starting still retires the process",
+    [
+      [...episode("outcome=aborted"), "--status", "interrupted", ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=abort"), ...count(1)],
+      [...span("ClaudeProcess"), "--status", "ok", ...count(1)],
+      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+    ],
+  ),
+  scenario(
+    "already-aborted",
+    "a call whose signal is already aborted ends as aborted without a process",
+    [
+      [...span("ClaudeCli.spawn"), "--max-count", "0"],
+      [...span("ProviderRuntime.dispose"), ...count(1)],
+    ],
+  ),
+  scenario(
+    "inactivity-timeout",
+    "a silent CLI fails the episode and is killed without a grace period",
+    [
+      [
+        ...episode("outcome=error"),
+        "--status",
+        "error",
+        ...count(1),
+        "--min-ms",
+        "300",
+      ],
+      [
+        ...span("ClaudeProcess.retire", "cause=timeout", "ended=killed"),
+        ...count(1),
+        "--max-ms",
+        "400",
+      ],
+      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+    ],
+    { env: { PI_CLAUDE_CLI_TIMEOUT_MS: "350" } },
+  ),
+  scenario(
+    "process-dies",
+    "a process that dies mid-turn fails the episode with its stderr",
+    [
+      [...episode("outcome=error"), "--status", "error", ...count(1)],
+      [...span("ClaudeProcess", "exitCode=3"), ...count(1)],
+      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+      [...span("ClaudeProcess.retire"), ...count(1)],
+    ],
+  ),
+  scenario(
+    "turn-fails",
+    "an error result fails the episode and retires the process",
+    [
+      [...episode("outcome=error"), "--status", "error", ...count(1)],
+      [
+        ...span("ClaudeProcess.retire", "cause=failure", "ended=exited"),
+        ...count(1),
+      ],
+      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+    ],
+  ),
+  scenario(
+    "idle-expiry",
+    "a parked process is retired when nobody comes back within the keepalive",
+    [
+      [
+        ...span("ClaudeProcess.retire", "cause=idle", "ended=exited"),
+        ...count(1),
+      ],
+      [...span("ClaudeProcessPool.park", "idleMs=300"), ...count(2)],
+      [...episode("mode=spawn"), ...count(2)],
+      [...span("ClaudeProcessPool.take", "hit=false"), ...count(2)],
+      [
+        "--order",
+        "ClaudeProcessPool.park,ClaudeProcess.retire[cause=idle],episode[spawnReason=noParked]",
+      ],
+    ],
+    { env: { PI_CLAUDE_CLI_KEEPALIVE_MS: "300" } },
+  ),
+  scenario(
+    "no-session",
+    "a call without a pi session is served and its process ended, not parked",
+    [
+      [
+        ...episode("mode=spawn", "spawnReason=noSession", "outcome=done"),
+        ...count(1),
+      ],
+      [...span("ClaudeProcess.retire", "cause=unparked"), ...count(1)],
+      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+    ],
+  ),
+  scenario(
+    "lifecycle-retire",
+    "a pi lifecycle event retires the parked process",
+    [
+      [
+        ...span("ClaudeProcess.retire", "cause=shutdown", "ended=exited"),
+        ...count(2),
+      ],
+      [...episode("mode=spawn", "spawnReason=noParked"), ...count(2)],
+      [...span("ClaudeProcessPool.retireAll", "count=1"), ...count(2)],
+    ],
+  ),
+  scenario(
+    "session-shutdown",
+    "disposing the runtime ends the parked process and removes the directory",
+    [
+      [...span("ProviderRuntime.dispose"), "--status", "ok", ...count(1)],
+      [
+        ...span("ClaudeProcess.retire", "cause=shutdown", "ended=exited"),
+        "--under",
+        "ClaudeProcess",
+        ...count(1),
+      ],
+      ["--order", "episode:end,ProviderRuntime.dispose,ClaudeProcess:end"],
+    ],
+  ),
+  scenario(
+    "layer-build-failure",
+    "a runtime that cannot build still ends every call with an error event",
+    [[...episode(), "--max-count", "0"]],
+  ),
+  scenario(
+    "env-stripping",
+    "the CLI never sees the variables that would move it off the subscription",
+    [[...episode("outcome=done"), ...count(1)]],
+    {
+      env: {
+        ANTHROPIC_API_KEY: "sk-scenario-must-not-leak",
+        ANTHROPIC_AUTH_TOKEN: "scenario-must-not-leak",
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:9",
+      },
+    },
+  ),
+  scenario(
+    "print-mode-exit",
+    "real pi in print mode loads the provider lazily and exits with a process parked",
+    [
+      [...episode("mode=spawn", "outcome=done"), ...count(1)],
+      [...span("ClaudeProcessPool.park", "idleMs=600000"), ...count(1)],
+      [...span("ProviderRuntime.dispose"), ...count(1)],
+      [
+        ...span("ClaudeProcess.retire", "cause=shutdown", "ended=exited"),
+        ...count(1),
+      ],
+    ],
+    { command: { _tag: "Pi", prompt: "magic word" } },
+  ),
+  scenario(
+    "live",
+    "LIVE: one turn, one tool call, one warm follow-up against the real CLI",
+    [
+      [...episode(), ...count(3), "--same", "pid"],
+      [...episode("mode=spawn", "outcome=toolUse"), ...count(1)],
+      [...episode("mode=handoff", "outcome=done"), ...count(1)],
+      [...episode("mode=turn", "outcome=done"), ...count(1)],
+      [...span("toolCall", "outcome=ok"), ...count(1)],
+      [...span("ClaudeCli.spawn"), ...count(1)],
+    ],
+    {
+      live: true,
+      command: { _tag: "Script", path: "scripts/scenarios/live.ts" },
+    },
+  ),
+];
+
+// ---- running ----------------------------------------------------------------
+
+/** How long one scenario's command may run before it counts as hung. */
+const SCENARIO_TIMEOUT = Duration.seconds(90);
+
+interface ScenarioRun {
+  readonly scenario: Scenario;
+  readonly failures: ReadonlyArray<string>;
+  readonly traceFile: string;
+}
+
+const runScenario = Effect.fn("Scenarios.run")(function* (
+  scenario: Scenario,
+  setup: {
+    readonly repoRoot: string;
+    readonly stubDirectory: string;
+    readonly workRoot: string;
+  },
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const work = path.join(setup.workRoot, scenario.name);
+  const cwd = path.join(work, "cwd");
+  yield* fs.makeDirectory(cwd, { recursive: true });
+  const traceFile = path.join(work, "trace.ndjson");
+  const traceCli = path.join(setup.repoRoot, "scripts", "trace.ts");
+
+  const command = (() => {
+    switch (scenario.command._tag) {
+      case "Driver":
+        return [
+          process.execPath,
+          path.join(setup.repoRoot, "scripts", "scenarios", "driver.ts"),
+          scenario.name,
+        ];
+      case "Script":
+        return [
+          process.execPath,
+          path.join(setup.repoRoot, scenario.command.path),
+        ];
+      case "Pi":
+        // `-ne` so an installed copy of this package cannot win the
+        // provider name over the working tree.
+        return [
+          "pi",
+          "-ne",
+          "-e",
+          setup.repoRoot,
+          "-p",
+          "--model",
+          "pi-claude-cli/claude-haiku-4-5",
+          scenario.command.prompt,
+        ];
+    }
+  })();
+
+  /** Run a command to completion and collect what it printed. */
+  const run = (argv: ReadonlyArray<string>, env: Record<string, string>) =>
+    Effect.gen(function* () {
+      const [program = "", ...args] = argv;
+      const handle = yield* spawner.spawn(
+        ChildProcess.make(program, args, {
+          cwd,
+          extendEnv: true,
+          env,
+          // Print mode reads stdin: an inherited pipe that never closes
+          // would keep pi waiting for EOF.
+          stdin: "ignore",
+          detached: false,
+          killSignal: "SIGKILL",
+        }),
+      );
+      const output = yield* Stream.mkString(Stream.decodeText(handle.all)).pipe(
+        Effect.forkChild,
+      );
+      const exitCode = Number(yield* handle.exitCode);
+      return { exitCode, output: yield* Fiber.join(output) };
+    }).pipe(
+      Effect.scoped,
+      Effect.catchTag("PlatformError", (error) =>
+        Effect.succeed({ exitCode: 127, output: error.message }),
+      ),
+      Effect.timeoutOption(SCENARIO_TIMEOUT),
+    );
+
+  const failures: Array<string> = [];
+  const ran = yield* run(
+    [
+      process.execPath,
+      traceCli,
+      "run",
+      "--quiet",
+      "--file",
+      traceFile,
+      "--",
+      ...command,
+    ],
+    {
+      // The stub stands in for `claude`, except in the live scenario.
+      PATH: scenario.live
+        ? (process.env.PATH ?? "")
+        : `${setup.stubDirectory}${delimiter}${process.env.PATH ?? ""}`,
+      // Nothing a scenario records may land in the user's own trace directory.
+      XDG_STATE_HOME: path.join(work, "state"),
+      SCENARIO_TMP: work,
+      CLAUDE_STUB_ARGV_FILE: path.join(work, "argv.jsonl"),
+      CLAUDE_STUB_ENV_FILE: path.join(work, "env.json"),
+      CLAUDE_STUB_TOOLS_FILE: path.join(work, "tools.jsonl"),
+      ...scenario.env,
+    },
+  );
+  if (Option.isNone(ran))
+    failures.push(
+      `the command did not exit within ${Duration.toSeconds(SCENARIO_TIMEOUT)}s`,
+    );
+  else if (ran.value.exitCode !== 0)
+    failures.push(
+      `the command exited ${ran.value.exitCode}\n${ran.value.output.trim()}`,
+    );
+
+  for (const assertion of scenario.asserts) {
+    const checked = yield* run(
+      [
+        process.execPath,
+        traceCli,
+        "assert",
+        "--quiet",
+        "--file",
+        traceFile,
+        ...assertion,
+      ],
+      {},
+    );
+    if (Option.isNone(checked) || checked.value.exitCode !== 0)
+      failures.push(
+        `trace assert ${assertion.join(" ")}\n${Option.match(checked, {
+          onNone: () => "(timed out)",
+          onSome: (result) => result.output.trim(),
+        })}`,
+      );
+  }
+  return { scenario, failures, traceFile } satisfies ScenarioRun;
+});
+
+const scenariosCommand = Command.make(
+  "scenarios",
+  {
+    names: Argument.String("scenario").pipe(
+      Argument.withDescription(
+        "Scenarios to run (default: every stub scenario)",
+      ),
+      Argument.variadic(),
+    ),
+    list: Flag.Boolean("list").pipe(
+      Flag.withDescription("List the scenarios and exit"),
+      Flag.withDefault(false),
+    ),
+    live: Flag.Boolean("live").pipe(
+      Flag.withDescription("Also run the live scenario (spends tokens)"),
+      Flag.withDefault(false),
+    ),
+    keep: Flag.Boolean("keep").pipe(
+      Flag.withDescription("Keep the trace files and print their paths"),
+      Flag.withDefault(false),
+    ),
+    concurrency: Flag.Int("concurrency").pipe(Flag.withDefault(4)),
+  },
+  Effect.fn("Scenarios.main")(function* (input) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    if (input.list) {
+      for (const each of SCENARIOS)
+        yield* Console.log(`${each.name.padEnd(22)} ${each.about}`);
+      return;
+    }
+    const unknown = input.names.filter(
+      (name) => !SCENARIOS.some((each) => each.name === name),
+    );
+    if (unknown.length > 0) {
+      yield* Console.error(`unknown scenario: ${unknown.join(", ")}`);
+      return yield* new ScenariosFailed({ names: unknown });
+    }
+    const selected = SCENARIOS.filter((each) =>
+      input.names.length > 0
+        ? input.names.includes(each.name)
+        : input.live || !each.live,
+    );
+
+    const repoRoot = path.resolve(import.meta.dirname, "..");
+    const workRoot = input.keep
+      ? yield* fs.makeTempDirectory({ prefix: "pi-claude-scenarios-" })
+      : yield* fs.makeTempDirectoryScoped({ prefix: "pi-claude-scenarios-" });
+    // The stub must be found as `claude` on PATH.
+    const stubDirectory = path.join(workRoot, "bin");
+    yield* fs.makeDirectory(stubDirectory, { recursive: true });
+    yield* fs.copyFile(
+      path.join(repoRoot, "tests", "e2e", "claude-stub.cjs"),
+      path.join(stubDirectory, "claude"),
+    );
+    yield* fs.chmod(path.join(stubDirectory, "claude"), 0o755);
+
+    const runs = yield* Effect.forEach(
+      selected,
+      (each) =>
+        runScenario(each, { repoRoot, stubDirectory, workRoot }).pipe(
+          Effect.tap((run) =>
+            Console.log(
+              run.failures.length === 0
+                ? `ok    ${each.name}`
+                : `FAIL  ${each.name}\n${run.failures
+                    .map(
+                      (failure) =>
+                        `      ${failure.replace(/\n/g, "\n      ")}`,
+                    )
+                    .join("\n")}`,
+            ),
+          ),
+        ),
+      { concurrency: input.concurrency },
+    );
+    const failed = runs.filter((run) => run.failures.length > 0);
+    yield* Console.log(
+      `\n${runs.length - failed.length} of ${runs.length} scenarios passed`,
+    );
+    if (input.keep)
+      for (const run of runs)
+        yield* Console.log(`  ${run.scenario.name}: ${run.traceFile}`);
+    if (failed.length > 0)
+      return yield* new ScenariosFailed({
+        names: failed.map((run) => run.scenario.name),
+      });
+  }, Effect.scoped),
+).pipe(
+  Command.withDescription(
+    "Run provider scenarios against the stub CLI and assert on their traces",
+  ),
+);
+
+const scenariosLayer = Layer.mergeAll(
+  nodeFileSystemLayer,
+  NodeStdio.layer,
+  NodeTerminal.layer,
+  crossSpawnSpawnerLayer,
+);
+
+NodeRuntime.runMain(
+  Command.run(scenariosCommand, { version: "1" }).pipe(
+    Effect.provide(scenariosLayer),
+  ),
+  { disableErrorReporting: true },
+);

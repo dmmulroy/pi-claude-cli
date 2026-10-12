@@ -1,17 +1,33 @@
 #!/usr/bin/env node
 /**
- * Deterministic Claude Code CLI stub for pi-claude-cli e2e tests.
- * Speaks just enough of the stream-json NDJSON protocol:
+ * Deterministic Claude Code CLI stub for pi-claude-cli scenarios and e2e.
+ * Speaks enough of the stream-json protocol to drive every provider path
+ * without credentials or a model call:
+ *
  *   claude --version            -> version string
  *   claude auth status          -> JSON auth blob
- *   claude ... stream-json ...  -> reads one user message, streams "PORT-OK"
+ *   claude -p ... stream-json   -> a long-lived process, like the real CLI:
+ *     - asks the in-band MCP server (`"type": "sdk"`) for its tools at start
+ *     - answers each user message, then waits for the next one
+ *     - exits when stdin closes
  *
- * A prompt containing "fanout" instead replays the shape of a real background
- * sub-agent turn (captured 2026-08-28, claude 2.1.231): the model launches an
- * agent, the CLI emits `result` for that turn WHILE the agent runs, and only
- * later notifies and re-invokes the model with the findings. A provider that
- * kills on the first result never sees "AGENT-REPORT".
+ * The last user text picks the behaviour by keyword:
+ *   (default)       streams "PORT-OK" and ends the turn
+ *   tool:<name>     streams a tool_use for pi's tool <name>, asks permission,
+ *                   calls it through MCP, and after pi's answer streams
+ *                   "TOOL-DONE <result text>" and ends the turn
+ *   hang            starts a message and never finishes it
+ *   die             starts a message, writes to stderr, exits with code 3
+ *   failturn        ends the turn with an error result
+ *
+ * Environment:
+ *   CLAUDE_STUB_ARGV_FILE   append this process's argv as a JSON line
+ *   CLAUDE_STUB_ENV_FILE    write the ANTHROPIC_* variables this process sees
+ *   CLAUDE_STUB_TOOLS_FILE  append the tool names the MCP server listed
+ *   CLAUDE_STUB_REFUSE_CONTROL=1  refuse thinking control requests
  */
+const fs = require("node:fs");
+
 const args = process.argv.slice(2);
 
 if (args.includes("--version")) {
@@ -25,146 +41,287 @@ if (args[0] === "auth" && args[1] === "status") {
 
 const emit = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 
-// The e2e asserts which thinking flags pi's level turned into.
 if (process.env.CLAUDE_STUB_ARGV_FILE) {
-  require("node:fs").appendFileSync(
+  fs.appendFileSync(
     process.env.CLAUDE_STUB_ARGV_FILE,
     JSON.stringify(args) + "\n",
   );
 }
+if (process.env.CLAUDE_STUB_ENV_FILE) {
+  fs.writeFileSync(
+    process.env.CLAUDE_STUB_ENV_FILE,
+    JSON.stringify({
+      anthropic: Object.keys(process.env).filter((key) =>
+        key.startsWith("ANTHROPIC_"),
+      ),
+      mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null,
+      disableAutoCompact: process.env.DISABLE_AUTO_COMPACT ?? null,
+    }),
+  );
+}
 
-let responded = false;
-const respond = () => {
-  if (responded) return;
-  responded = true;
-  emit({ type: "system", subtype: "init", session_id: "stub-session" });
-  emit({
-    type: "stream_event",
-    event: {
-      type: "message_start",
-      message: { usage: { input_tokens: 5, output_tokens: 0 } },
-    },
+// ---- in-band MCP client ------------------------------------------------------
+
+const sdkServer = (() => {
+  const index = args.indexOf("--mcp-config");
+  if (index === -1) return undefined;
+  try {
+    const servers = JSON.parse(args[index + 1]).mcpServers ?? {};
+    return Object.keys(servers).find((name) => servers[name].type === "sdk");
+  } catch {
+    return undefined;
+  }
+})();
+
+let controlSeq = 0;
+let rpcSeq = 0;
+/** Our control requests awaiting the provider's control_response. */
+const controlWaiters = new Map();
+
+/** Send one MCP message to the in-band server; resolves with its response. */
+const mcp = (method, params, notification = false) =>
+  new Promise((resolve) => {
+    const requestId = `stub-${++controlSeq}`;
+    const message = { jsonrpc: "2.0", method };
+    if (params !== undefined) message.params = params;
+    if (!notification) message.id = rpcSeq++;
+    controlWaiters.set(requestId, (response) =>
+      resolve({ rpcId: message.id, response: response?.mcp_response }),
+    );
+    emit({
+      type: "control_request",
+      request_id: requestId,
+      request: { subtype: "mcp_message", server_name: sdkServer, message },
+    });
   });
-  emit({
-    type: "stream_event",
-    event: {
-      type: "content_block_start",
-      index: 0,
-      content_block: { type: "text", text: "" },
-    },
+
+const askPermission = (toolName, toolUseId, input) =>
+  new Promise((resolve) => {
+    const requestId = `stub-${++controlSeq}`;
+    controlWaiters.set(requestId, resolve);
+    emit({
+      type: "control_request",
+      request_id: requestId,
+      request: {
+        subtype: "can_use_tool",
+        tool_name: toolName,
+        input,
+        tool_use_id: toolUseId,
+      },
+    });
   });
-  emit({
-    type: "stream_event",
-    event: {
-      type: "content_block_delta",
-      index: 0,
-      delta: { type: "text_delta", text: "PORT-OK" },
-    },
+
+if (sdkServer) {
+  (async () => {
+    await mcp("initialize", {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "claude-stub", version: "9.9.9" },
+    });
+    await mcp("notifications/initialized", undefined, true);
+    const listed = await mcp("tools/list");
+    if (process.env.CLAUDE_STUB_TOOLS_FILE) {
+      fs.appendFileSync(
+        process.env.CLAUDE_STUB_TOOLS_FILE,
+        JSON.stringify(
+          (listed.response?.result?.tools ?? []).map((tool) => tool.name),
+        ) + "\n",
+      );
+    }
+  })();
+}
+
+// ---- turns -------------------------------------------------------------------
+
+const streamEvent = (event) => emit({ type: "stream_event", event });
+
+const messageStart = () =>
+  streamEvent({
+    type: "message_start",
+    message: { usage: { input_tokens: 5, output_tokens: 0 } },
   });
-  emit({
-    type: "stream_event",
-    event: { type: "content_block_stop", index: 0 },
+
+const messageEnd = (stopReason) => {
+  streamEvent({
+    type: "message_delta",
+    delta: { stop_reason: stopReason },
+    usage: { output_tokens: 3 },
   });
-  emit({
-    type: "stream_event",
-    event: {
-      type: "message_delta",
-      delta: { stop_reason: "end_turn" },
-      usage: { output_tokens: 3 },
-    },
+  streamEvent({ type: "message_stop" });
+};
+
+const textBlock = (index, text) => {
+  streamEvent({
+    type: "content_block_start",
+    index,
+    content_block: { type: "text", text: "" },
   });
-  emit({ type: "stream_event", event: { type: "message_stop" } });
-  emit({ type: "result", subtype: "success", is_error: false });
-  process.exit(0);
+  streamEvent({
+    type: "content_block_delta",
+    index,
+    delta: { type: "text_delta", text },
+  });
+  streamEvent({ type: "content_block_stop", index });
 };
 
 /** One assistant cycle: message_start … message_stop, streaming `text`. */
 const cycle = (text) => {
-  emit({
-    type: "stream_event",
-    event: {
-      type: "message_start",
-      message: { usage: { input_tokens: 5, output_tokens: 0 } },
-    },
+  messageStart();
+  textBlock(0, text);
+  messageEnd("end_turn");
+};
+
+const success = () =>
+  emit({ type: "result", subtype: "success", is_error: false });
+
+let turnActive = false;
+let toolSeq = 0;
+/** Rejects the in-flight tool turn when the provider interrupts it. */
+let interruptTurn;
+
+const endInterruptedTurn = () => {
+  turnActive = false;
+  emit({ type: "result", subtype: "error_during_execution", is_error: true });
+};
+
+const toolTurn = async (piToolName) => {
+  const toolUseId = `toolu_stub_${process.pid}_${++toolSeq}`;
+  const name = `mcp__${sdkServer}__${piToolName}`;
+  const input = { path: "stub.txt" };
+  messageStart();
+  streamEvent({
+    type: "content_block_start",
+    index: 0,
+    content_block: { type: "tool_use", id: toolUseId, name, input: {} },
   });
-  emit({
-    type: "stream_event",
-    event: {
+  streamEvent({
+    type: "content_block_delta",
+    index: 0,
+    delta: { type: "input_json_delta", partial_json: JSON.stringify(input) },
+  });
+  streamEvent({ type: "content_block_stop", index: 0 });
+
+  const interrupted = new Promise((_, reject) => (interruptTurn = reject));
+  const permission = askPermission(name, toolUseId, input);
+  messageEnd("tool_use");
+  const decision = await Promise.race([permission, interrupted]);
+  if (decision?.behavior !== "allow") {
+    // Denied: the real CLI feeds the model the denial; the provider is
+    // expected to interrupt the turn instead of letting it continue.
+    await interrupted;
+    return;
+  }
+  const call = mcp("tools/call", {
+    name: piToolName,
+    arguments: input,
+    _meta: { "claudecode/toolUseId": toolUseId, progressToken: rpcSeq },
+  });
+  const answer = await Promise.race([call, interrupted]);
+  const text = (answer.response?.result?.content ?? [])
+    .map((block) => block.text ?? "")
+    .join("");
+  emit({ type: "user", message: { role: "user", content: [] } });
+  cycle(`TOOL-DONE ${text}`);
+  turnActive = false;
+  success();
+};
+
+const startTurn = (text) => {
+  turnActive = true;
+  emit({ type: "system", subtype: "init", session_id: "stub-session" });
+  const tool = /tool:([A-Za-z0-9_-]+)/.exec(text);
+  if (tool) {
+    toolTurn(tool[1]).catch(endInterruptedTurn);
+    return;
+  }
+  if (text.includes("hang")) {
+    messageStart();
+    streamEvent({
       type: "content_block_start",
       index: 0,
       content_block: { type: "text", text: "" },
-    },
-  });
-  emit({
-    type: "stream_event",
-    event: {
+    });
+    streamEvent({
       type: "content_block_delta",
       index: 0,
-      delta: { type: "text_delta", text },
-    },
-  });
-  emit({
-    type: "stream_event",
-    event: { type: "content_block_stop", index: 0 },
-  });
-  emit({
-    type: "stream_event",
-    event: {
-      type: "message_delta",
-      delta: { stop_reason: "end_turn" },
-      usage: { output_tokens: 3 },
-    },
-  });
-  emit({ type: "stream_event", event: { type: "message_stop" } });
+      delta: { type: "text_delta", text: "PARTIAL" },
+    });
+    interruptTurn = () => endInterruptedTurn();
+    return;
+  }
+  if (text.includes("die")) {
+    messageStart();
+    process.stderr.write("stub: fatal: simulated crash\n");
+    setTimeout(() => process.exit(3), 20);
+    return;
+  }
+  if (text.includes("failturn")) {
+    turnActive = false;
+    emit({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      result: "stub: the turn failed",
+    });
+    return;
+  }
+  cycle("PORT-OK");
+  turnActive = false;
+  success();
 };
 
-const respondFanout = () => {
-  if (responded) return;
-  responded = true;
-  emit({ type: "system", subtype: "init", session_id: "stub-session" });
+/** The text of a user message: the last text block names the behaviour. */
+const userText = (message) => {
+  const content = message?.message?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const texts = content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text);
+  return texts[texts.length - 1] ?? "";
+};
 
-  // The agent, and an auto-backgrounded Bash that is NOT one.
-  emit({
-    type: "system",
-    subtype: "task_started",
-    task_id: "aStubAgent1",
-    task_type: "local_agent",
-    tool_use_id: "toolu_stub_1",
-    description: "Dig into the thing",
-    subagent_type: "general-purpose",
-  });
-  emit({
-    type: "system",
-    subtype: "task_started",
-    task_id: "bStubShell1",
-    task_type: "local_bash",
-    description: "Search for a local checkout",
-  });
-
-  cycle("LAUNCHED-WAITING");
-  // The turn's result, with the agent still running. This is the kill point.
-  emit({ type: "result", subtype: "success", is_error: false });
-
-  setTimeout(() => {
+const handleLine = (line) => {
+  let msg;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return;
+  }
+  if (msg.type === "control_response") {
+    const waiter = controlWaiters.get(msg.response?.request_id);
+    controlWaiters.delete(msg.response?.request_id);
+    if (waiter) waiter(msg.response?.response);
+    return;
+  }
+  if (msg.type === "control_request") {
+    if (msg.request?.subtype === "interrupt") {
+      emit({
+        type: "control_response",
+        response: { subtype: "success", request_id: msg.request_id },
+      });
+      if (turnActive && interruptTurn) {
+        const interrupt = interruptTurn;
+        interruptTurn = undefined;
+        interrupt(new Error("interrupted"));
+      }
+      return;
+    }
+    // Thinking changes on a live process: acknowledge, as the CLI does.
     emit({
-      type: "system",
-      subtype: "task_notification",
-      task_id: "bStubShell1",
-      status: "completed",
+      type: "control_response",
+      response:
+        process.env.CLAUDE_STUB_REFUSE_CONTROL === "1"
+          ? {
+              subtype: "error",
+              request_id: msg.request_id,
+              error: "stub refuses control requests",
+            }
+          : { subtype: "success", request_id: msg.request_id },
     });
-    emit({
-      type: "system",
-      subtype: "task_notification",
-      task_id: "aStubAgent1",
-      status: "completed",
-      summary: "found it",
-      usage: { total_tokens: 1234, tool_uses: 2, duration_ms: 900 },
-    });
-    // The CLI re-invokes the model itself once the agent reports.
-    cycle("AGENT-REPORT");
-    emit({ type: "result", subtype: "success", is_error: false });
-    process.exit(0);
-  }, 1500);
+    return;
+  }
+  if (msg.type === "user") startTurn(userText(msg));
 };
 
 let buf = "";
@@ -174,23 +331,8 @@ process.stdin.on("data", (chunk) => {
   while ((nl = buf.indexOf("\n")) >= 0) {
     const line = buf.slice(0, nl);
     buf = buf.slice(nl + 1);
-    let msg;
-    try {
-      msg = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    // Thinking changes on a live process: acknowledge, as the CLI does.
-    if (msg.type === "control_request") {
-      emit({
-        type: "control_response",
-        response: { subtype: "success", request_id: msg.request_id },
-      });
-      continue;
-    }
-    if (line.includes("fanout")) respondFanout();
-    else respond();
+    handleLine(line);
   }
 });
-// Safety net: some callers write without trailing newline then wait.
-setTimeout(respond, 3000);
+// Like the real CLI in print mode: closing stdin ends the process.
+process.stdin.on("end", () => process.exit(0));

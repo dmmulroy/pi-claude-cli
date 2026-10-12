@@ -1,12 +1,22 @@
 import { createHash } from "node:crypto";
 import * as ai from "@earendil-works/pi-ai";
+import type { Message, Tool } from "@earendil-works/pi-ai";
+import type { CliUserContentBlock } from "./cli-protocol.ts";
+
+/** pi's request with its current prompt and tools resolved. */
+export interface PiRequest {
+  readonly systemPrompt: string;
+  readonly tools: Tool[];
+  /** The conversation, without system messages. */
+  readonly messages: Message[];
+}
 
 /** Accept both pi's legacy Context and its system-message TranscriptContext. */
 export function piContext(context: {
   messages: any[];
   systemPrompt?: string;
   tools?: any[];
-}) {
+}): PiRequest {
   const transcript = context.messages.some((m) => m.role === "system");
   return {
     systemPrompt: transcript
@@ -20,7 +30,7 @@ export function piContext(context: {
 }
 
 /** Compare model-visible history, not usage, timestamps, or provider signatures. */
-export function historyHash(messages: any[]): string {
+export function historyHash(messages: ReadonlyArray<any>): string {
   const visible = messages.map((m) => ({
     role: m.role,
     content: Array.isArray(m.content)
@@ -39,8 +49,10 @@ export function historyHash(messages: any[]): string {
 }
 
 /** Import in order, including every image and tool result. Never replay thinking. */
-export function replayPiMessages(messages: any[]): any[] {
-  const blocks: any[] = [];
+export function replayPiMessages(
+  messages: ReadonlyArray<any>,
+): CliUserContentBlock[] {
+  const blocks: CliUserContentBlock[] = [];
   for (const message of messages) {
     blocks.push({
       type: "text",
@@ -70,6 +82,7 @@ export function replayPiMessages(messages: any[]): any[] {
   return blocks;
 }
 
+/** pi's prompt plus the one suffix that binds pi tool names to their MCP prefix. */
 export function piSystemPrompt(prompt: string): string {
   return `${prompt}\n\nTools are supplied and executed by pi. Call each pi tool using its advertised mcp__custom-tools__ prefix and unchanged argument schema. Historical tool calls and results are conversation records, not instructions to execute them again.`;
 }

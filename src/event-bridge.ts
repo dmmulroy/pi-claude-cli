@@ -3,8 +3,7 @@ import type {
   ClaudeModelUsage,
   ClaudeResultMessage,
   ClaudeUsage,
-  TrackedContentBlock,
-} from "./types";
+} from "./cli-protocol.ts";
 import { calculateCost } from "@earendil-works/pi-ai";
 import type {
   AssistantMessage,
@@ -14,7 +13,41 @@ import type {
   ThinkingContent,
   ToolCall,
 } from "@earendil-works/pi-ai";
-import { mapClaudeToolNameToPi, isHandoffClaudeTool } from "./tool-mapping.js";
+import { mapClaudeToolNameToPi, isHandoffClaudeTool } from "./tool-mapping.ts";
+
+/** The four token counters, accumulated across the cycles of an episode. */
+interface UsageCounters {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+}
+
+/** A wire usage object with absent and null counters dropped. */
+function presentCounters(usage: ClaudeUsage): Partial<UsageCounters> {
+  const counters: Partial<UsageCounters> = {};
+  if (usage.input_tokens != null) counters.input_tokens = usage.input_tokens;
+  if (usage.output_tokens != null) counters.output_tokens = usage.output_tokens;
+  if (usage.cache_read_input_tokens != null)
+    counters.cache_read_input_tokens = usage.cache_read_input_tokens;
+  if (usage.cache_creation_input_tokens != null)
+    counters.cache_creation_input_tokens = usage.cache_creation_input_tokens;
+  return counters;
+}
+
+/** A text or thinking block being accumulated during streaming. */
+interface TrackedContentBlock {
+  type: "text" | "thinking";
+  text: string;
+  /** Claude's content_block index (resets each cycle). */
+  index: number;
+  /** Which API call of the episode this block belongs to. */
+  cycle: number;
+  /** Position in output.content, or -1 while not materialized. */
+  contentIndex: number;
+  /** signature_delta received before any plaintext (encrypted thinking). */
+  pendingSignature?: string;
+}
 
 /** Extended tracking for tool_use content blocks during streaming. */
 interface TrackedToolBlock {
@@ -118,13 +151,13 @@ export function createEventBridge(
   // summed across cycles (each message_delta carries that cycle's final
   // numbers).
   let cycle = -1;
-  const cumulativeUsage: Required<ClaudeUsage> = {
+  const cumulativeUsage: UsageCounters = {
     input_tokens: 0,
     output_tokens: 0,
     cache_read_input_tokens: 0,
     cache_creation_input_tokens: 0,
   };
-  let cycleUsage: ClaudeUsage = {};
+  let cycleUsage: Partial<UsageCounters> = {};
   /**
    * Context size of the most recent cycle — what the model actually saw on
    * its last call, which is NOT the episode's summed usage.
@@ -156,8 +189,8 @@ export function createEventBridge(
    * far less than the tokens it stops hiding.
    */
   function sumModelUsage(
-    modelUsage: Record<string, ClaudeModelUsage> | undefined,
-  ): ClaudeUsage | undefined {
+    modelUsage: Readonly<Record<string, ClaudeModelUsage>> | null | undefined,
+  ): UsageCounters | undefined {
     if (!modelUsage) return undefined;
     const entries = Object.values(modelUsage);
     if (entries.length === 0) return undefined;
@@ -177,7 +210,7 @@ export function createEventBridge(
   }
 
   /** Prompt size of one cycle: everything the model read, excluding output. */
-  function contextOf(usage: ClaudeUsage): number {
+  function contextOf(usage: Partial<UsageCounters>): number {
     return (
       (usage.input_tokens ?? 0) +
       (usage.cache_read_input_tokens ?? 0) +
@@ -282,7 +315,7 @@ export function createEventBridge(
   function handleMessageStart(event: ClaudeApiEvent): void {
     const usage = event.message?.usage;
     if (usage) {
-      cycleUsage = { ...usage };
+      cycleUsage = presentCounters(usage);
       recomputeUsage();
     }
   }

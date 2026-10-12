@@ -145,6 +145,21 @@ const traceRecordWriter = (
   };
 };
 
+/**
+ * Record an event on a span now. For events that belong to a span other than
+ * the current one, which `Effect.log*` cannot address.
+ */
+export const recordSpanEvent = (
+  span: Tracer.Span,
+  name: string,
+  attributes: Record<string, unknown>,
+): Effect.Effect<void> =>
+  Effect.clockWith((clock) =>
+    Effect.sync(() =>
+      span.event(name, clock.currentTimeNanosUnsafe(), attributes),
+    ),
+  );
+
 /** A native span that also reports its start, events and end to the file. */
 class FileTraceSpan extends Tracer.NativeSpan {
   private readonly writeRecord: (record: TraceRecord) => void;

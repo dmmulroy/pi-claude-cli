@@ -3,31 +3,27 @@
  *
  * pi owns the prompt, tools and conversation; the CLI must honour the flags
  * and environment controls that keep its own memory, skills, settings and
- * native tools out of the way. Older CLIs are not assumed to.
+ * native tools out of the way, and must host an in-band MCP server. Older
+ * CLIs are not assumed to.
  */
 
-/** The CLI or its environment cannot provide the isolation pi needs. */
-export class CliRequirementError extends Error {}
+import { Option } from "effect";
 
-/** Oldest Claude Code version whose isolation controls were tested. */
+/** Oldest Claude Code version the launch flags and in-band MCP were tested on. */
 export const MIN_SUPPORTED_CLI_VERSION = "2.1.263";
 
-/**
- * Throw unless `claude --version` output names a supported version.
- *
- * @throws CliRequirementError when the version is older than
- *   MIN_SUPPORTED_CLI_VERSION or cannot be parsed
- */
-export function assertSupportedCliVersion(versionOutput: string): void {
-  const match = /(\d+)\.(\d+)\.(\d+)(?=\s|$)/.exec(versionOutput.trim());
-  const parts = match?.slice(1).map(Number);
+/** The `major.minor.patch` in `claude --version` output, when there is one. */
+export const parseCliVersion = (versionOutput: string): Option.Option<string> =>
+  Option.fromNullOr(/(\d+\.\d+\.\d+)(?=\s|$)/.exec(versionOutput.trim())).pipe(
+    Option.flatMap((match) => Option.fromUndefinedOr(match[1])),
+  );
+
+/** True when `version` is `MIN_SUPPORTED_CLI_VERSION` or newer. */
+export const isSupportedCliVersion = (version: string): boolean => {
+  const parts = version.split(".").map(Number);
   const floor = MIN_SUPPORTED_CLI_VERSION.split(".").map(Number);
   const difference = parts
-    ?.map((part, i) => part - floor[i])
-    .find((n) => n !== 0);
-  if (!parts || (difference !== undefined && difference < 0)) {
-    throw new CliRequirementError(
-      `pi-claude-cli requires Claude Code ${MIN_SUPPORTED_CLI_VERSION}+ (the tested isolation controls). Update Claude Code.`,
-    );
-  }
-}
+    .map((part, index) => part - (floor[index] ?? 0))
+    .find((delta) => delta !== 0);
+  return difference === undefined || difference > 0;
+};

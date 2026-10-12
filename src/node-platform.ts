@@ -6,6 +6,7 @@
  * which costs every pi session about 80 ms and 25 MB for nothing.
  */
 
+import * as NodeCrypto from "@effect/platform-node-shared/NodeCrypto";
 import * as NodeFileSystem from "@effect/platform-node-shared/NodeFileSystem";
 import * as NodePath from "@effect/platform-node-shared/NodePath";
 import { Layer } from "effect";
@@ -15,3 +16,6 @@ export const nodeFileSystemLayer = Layer.mergeAll(
   NodeFileSystem.layer,
   NodePath.layer,
 );
+
+/** Node `Crypto`: random ids. */
+export const nodeCryptoLayer = NodeCrypto.layer;

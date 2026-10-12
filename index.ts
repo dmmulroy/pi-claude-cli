@@ -2,103 +2,50 @@
  * Pi extension entry point for pi-claude-cli.
  *
  * Registers the `pi-claude-cli` provider, which serves pi model calls through
- * the Claude Code CLI subprocess (stream-json NDJSON) so they run on the
- * user's Claude subscription. pi owns the prompt, tools and conversation.
+ * the Claude Code CLI so they run on the user's Claude subscription. pi owns
+ * the prompt, tools and conversation.
+ *
+ * This file stays free of Effect imports. The provider's runtime is loaded on
+ * the first model call: importing Effect at the top would cost every pi
+ * start about 135 ms and 60 MB, used or not.
  */
 
-import { getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
+import {
+  type Api,
+  type AssistantMessageEventStream,
+  createAssistantMessageEventStream,
+  type Model,
+} from "@earendil-works/pi-ai";
 import { registerApiProvider } from "@earendil-works/pi-ai/compat";
+import { getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { streamViaCli } from "./src/provider.js";
-import {
-  validateCliPresence,
-  validateCliAuth,
-  killAllProcesses,
-} from "./src/process-manager.js";
-import {
-  writeSchemaFile,
-  cleanupMcpConfigFiles,
-  type McpToolDef,
-} from "./src/mcp-config.js";
-import { startHandoffBroker, stopHandoffBroker } from "./src/handoff-broker.js";
-import { cleanupRuntimeDir } from "./src/runtime-dir.js";
-import { retireAllCliProcesses } from "./src/cli-process.js";
-import { cliThinkingLevelMap } from "./src/thinking-config.js";
-import { rewriteOverflowMessage } from "./src/overflow.js";
-import { piContext } from "./src/pi-context.js";
-
-// Kill all active Claude subprocesses on process exit to prevent orphans
-process.on("exit", killAllProcesses);
-// Remove the schema/config temp files this process staged
-process.on("exit", cleanupMcpConfigFiles);
-// Close the handoff socket and remove its file
-process.on("exit", stopHandoffBroker);
-// Last: take the private runtime directory itself, socket and secret included.
-process.on("exit", cleanupRuntimeDir);
-// Parked CLI processes hold their stdin from us: ending pi ends them (the
-// pipe closes and the CLI exits), but retire cleanly when we can.
-process.on("beforeExit", () => {
-  void retireAllCliProcesses();
-});
+import { createEventBridge } from "./src/event-bridge.ts";
+import { rewriteOverflowMessage } from "./src/overflow.ts";
+import type { ProviderRuntime } from "./src/provider-runtime.ts";
+import { endStreamWithError } from "./src/terminal-event.ts";
+import { cliThinkingLevelMap } from "./src/thinking-config.ts";
 
 const PROVIDER_ID = "pi-claude-cli";
 
-/**
- * Stage the tool schemas this request advertises, for the CLI's schema-only
- * MCP server to read at spawn.
- *
- * The request, not pi's tool registry, is authoritative: inactive tools stay
- * inactive, and a tool-less call (title generation) advertises none. Called
- * on every request; a surface already staged costs one hash.
- *
- * A changed surface gets a different `version`, which retires the session's
- * parked process (its tool list is what it advertised at connect time); the
- * next call imports pi's history into a fresh one.
- *
- * @throws when the schema file cannot be written: without it the model would
- *   run with no tools and say so only by failing to call them
- */
-function stageRequestToolSchemas(context: Parameters<typeof piContext>[0]): {
-  schemaPath: string;
-  version: number;
-} {
-  const toolDefs: McpToolDef[] = piContext(context).tools.map((t: any) => ({
-    name: t.name,
-    description: t.description,
-    inputSchema: t.parameters,
-  }));
-  const { schemaPath, version } = writeSchemaFile(toolDefs);
-  return { schemaPath, version };
-}
+type StartEpisode = ProviderRuntime["startEpisode"];
 
-/**
- * The handoff socket the schema server calls back into. Started once, on the
- * first turn; a failure to bind logs once and leaves proxied handoffs off (the
- * provider then interrupts the turn at each tool call and reimports pi's
- * history afterwards).
- */
-let handoffSocket: string | undefined;
-let handoffSocketAttempted = false;
-async function ensureHandoffSocket(): Promise<string | undefined> {
-  if (handoffSocket || handoffSocketAttempted) return handoffSocket;
-  handoffSocketAttempted = true;
-  try {
-    handoffSocket = await startHandoffBroker();
-  } catch (err) {
-    console.warn(
-      "[pi-claude-cli] handoff socket unavailable, tool calls fall back to interrupt-and-reimport:",
-      err,
-    );
-  }
-  return handoffSocket;
+/** End a stream whose provider runtime could not even be loaded. */
+function failStream(
+  piStream: AssistantMessageEventStream,
+  model: Model<Api>,
+  cause: unknown,
+): void {
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  endStreamWithError(
+    piStream,
+    createEventBridge(piStream, model).getOutput(),
+    "error",
+    `pi-claude-cli could not start its provider runtime: ${reason}`,
+  );
 }
 
 export default function (pi: ExtensionAPI) {
   try {
-    // Startup validation
-    validateCliPresence(); // throws if CLI not on PATH
-    validateCliAuth(); // warns if not authenticated
-
     const models = getModels("anthropic").map((model) => ({
       id: model.id,
       name: model.name,
@@ -109,44 +56,60 @@ export default function (pi: ExtensionAPI) {
       maxTokens: model.maxTokens,
       // pi's own per-model map, less `minimal` on adaptive models (it would
       // send what `low` sends), so the selector offers only levels the model
-      // has, and each maps to the effort pi uses (resolveCliThinking reads
-      // it).
+      // has, and each maps to the effort pi uses.
       thinkingLevelMap: cliThinkingLevelMap(model),
     }));
 
+    // One runtime per extension instance: pi calls this factory once per
+    // session and emits `session_shutdown` before tearing it down.
+    let loaded: Promise<ProviderRuntime> | undefined;
+    const provider = (): Promise<ProviderRuntime> =>
+      (loaded ??= import("./src/provider-runtime.ts").then((module) =>
+        module.startProviderRuntime(),
+      ));
+
+    // pi needs the stream back synchronously, so the episode starts once the
+    // runtime has loaded and the stream is returned at once.
+    const streamSimple = (
+      model: Parameters<StartEpisode>[1],
+      context: Parameters<StartEpisode>[2],
+      options?: Parameters<StartEpisode>[3],
+    ): AssistantMessageEventStream => {
+      const piStream = createAssistantMessageEventStream();
+      provider().then(
+        (runtime) => runtime.startEpisode(piStream, model, context, options),
+        (cause) => failStream(piStream, model, cause),
+      );
+      return piStream;
+    };
+
     // A parked process is a cache of the history it acknowledged. Every event
     // that replaces or rewrites that history retires it; the next call
-    // imports pi's current history into a fresh process.
-    const retire = async () => {
-      await retireAllCliProcesses();
+    // imports pi's current history into a fresh process. Nothing is loaded
+    // just to retire nothing.
+    const retireParked = async () => {
+      await (await loaded?.catch(() => undefined))?.retireParkedProcesses();
     };
-    pi.on("session_start", retire);
-    pi.on("model_select", retire);
-    pi.on("session_shutdown", retire);
-    pi.on("session_tree", retire);
-    pi.on("session_compact", retire);
+    pi.on("session_start", retireParked);
+    pi.on("model_select", retireParked);
+    pi.on("session_tree", retireParked);
+    pi.on("session_compact", retireParked);
 
-    const streamFn = (
-      model: Parameters<typeof streamViaCli>[0],
-      context: Parameters<typeof streamViaCli>[1],
-      options?: Parameters<typeof streamViaCli>[2],
-    ) => {
-      const schema = stageRequestToolSchemas(context);
-      // The socket start is async; the provider awaits it inside its own
-      // driver so streamSimple still returns the stream synchronously.
-      return streamViaCli(model, context, {
-        ...options,
-        mcpConfig: { ...schema, handoffSocket: ensureHandoffSocket() },
-      });
-    };
+    // Disposing ends every CLI process and timer, which is what lets print
+    // mode exit. A disposed runtime cannot be reused, so the next call
+    // builds a fresh one.
+    pi.on("session_shutdown", async () => {
+      const current = loaded;
+      loaded = undefined;
+      await (await current?.catch(() => undefined))?.dispose();
+    });
 
     // pi.registerProvider() feeds pi's provider composer, but pi's default
-    // stream fn (pi-agent-core setDefaultStreamFn) resolves model.api against
-    // pi-ai's global api registry instead — print mode and nested agent loops
-    // take that path and would throw "No API provider registered for api:
-    // pi-claude-cli". Register the custom api id there too.
+    // stream fn resolves model.api against pi-ai's global api registry
+    // instead; print mode and nested agent loops take that path. Register
+    // the custom api id there too.
     registerApiProvider(
-      { api: PROVIDER_ID as any, stream: streamFn, streamSimple: streamFn },
+      { api: PROVIDER_ID, stream: streamSimple, streamSimple },
       PROVIDER_ID,
     );
 
@@ -161,7 +124,7 @@ export default function (pi: ExtensionAPI) {
       apiKey: "unused",
       api: "pi-claude-cli",
       models,
-      streamSimple: streamFn,
+      streamSimple,
     });
   } catch (err) {
     console.error(`[pi-claude-cli] Failed to register provider:`, err);
