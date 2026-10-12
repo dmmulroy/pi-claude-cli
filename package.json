@@ -1,6 +1,7 @@
 {
   "name": "@saccolabs/pi-claude-cli",
   "version": "0.10.0",
+  "private": true,
   "description": "Pi coding agent extension that routes LLM calls through the Claude Code CLI",
   "main": "index.ts",
   "keywords": [
@@ -13,7 +14,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/agustinsacco/pi-claude-cli"
+    "url": "https://github.com/dmmulroy/pi-claude-cli"
   },
   "license": "MIT",
   "peerDependencies": {
