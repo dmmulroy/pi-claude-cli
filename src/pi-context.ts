@@ -12,6 +12,7 @@ import type {
   CliTextOrImageBlock,
   CliUserContentBlock,
 } from "./cli-protocol.ts";
+import { replayableSignedThinking } from "./signed-thinking.ts";
 import { CUSTOM_TOOLS_MCP_PREFIX } from "./tool-mapping.ts";
 import { createToolCallIdMap, toolCallIdsOf } from "./tool-call-id.ts";
 
@@ -150,8 +151,14 @@ function textAndImageBlocks(
  * `transformMessages`): failed and aborted assistant turns are left out, and
  * a tool call with no result gets one that says so. Tool call ids Claude
  * would reject are replaced by stable valid ones on the way out
- * (`src/tool-call-id.ts`); pi's messages are never modified. Thinking is not
- * replayed.
+ * (`src/tool-call-id.ts`); pi's messages are never modified.
+ *
+ * Thinking is replayed as signed thinking only from a message of this
+ * provider and of `modelId` whose text and tool calls are unchanged since
+ * the API signed it (`src/signed-thinking.ts`): then the raw blocks go back
+ * exactly as they came, in their places. Thinking of any other message, an
+ * edited one or another provider's, is replayed as plain text and never
+ * with a signature.
  *
  * @returns The frames, the last of which is the user message that starts the
  *   turn; or undefined when the history cannot be expressed this way (it
@@ -160,6 +167,7 @@ function textAndImageBlocks(
  */
 export function structuredReplay(
   messages: ReadonlyArray<Message>,
+  modelId: string,
 ): ReadonlyArray<CliReplayFrame> | undefined {
   const ids = createToolCallIdMap(toolCallIdsOf(messages));
   const frames: Array<
@@ -193,7 +201,27 @@ export function structuredReplay(
       if (message.stopReason === "error" || message.stopReason === "aborted")
         continue;
       const content: CliAssistantContentBlock[] = [];
+      const signed = replayableSignedThinking(message, modelId);
+      /** Text and tool call blocks of the message seen so far. */
+      let visible = 0;
+      const replaySignedAt = (position: number) => {
+        for (const entry of signed?.blocks ?? [])
+          if (entry.at === position) content.push(entry.block);
+      };
       for (const block of message.content) {
+        if (block.type === "thinking") {
+          // Signed blocks stand in for pi's own; without them the thinking
+          // goes back as text, as pi-ai sends thinking it holds no
+          // signature for.
+          if (
+            signed === undefined &&
+            block.redacted !== true &&
+            block.thinking.trim().length > 0
+          )
+            content.push({ type: "text", text: block.thinking });
+          continue;
+        }
+        replaySignedAt(visible++);
         if (block.type === "text") {
           if (block.text.length > 0)
             content.push({ type: "text", text: block.text });
@@ -207,6 +235,9 @@ export function structuredReplay(
             input: isArgumentRecord(block.arguments) ? block.arguments : {},
           });
       }
+      // Blocks that stood after the last text or tool call, or past it.
+      for (const entry of signed?.blocks ?? [])
+        if (entry.at >= visible) content.push(entry.block);
       if (content.length === 0) continue;
       if (frames[frames.length - 1]?.kind !== "user") return undefined;
       frames.push({ kind: "assistant", content });

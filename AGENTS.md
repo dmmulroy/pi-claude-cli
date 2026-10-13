@@ -50,6 +50,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - `src/cli-protocol.ts`: lenient `Schema` decoding of the CLI's NDJSON; builders for stdin lines.
 - `src/event-bridge.ts`: convert CLI stream events to pi messages. Content indexes restart each model cycle, so blocks are tracked by `(cycle, index)`.
 - `src/pi-context.ts`: normalize old/new pi context formats, import ordered messages and images (as labelled text, or as structured frames with `PI_CLAUDE_CLI_IMPORT=structured`), hash acknowledged history.
+- `src/signed-thinking.ts`: Claude's raw signed thinking blocks, stored on pi's assistant message under `piClaudeCli` by the event bridge and replayed by a structured import only while the message is unchanged. Pure; imported eagerly through `event-bridge`.
 - `src/tool-call-id.ts`: tool call ids Claude would reject, mapped to valid ones in what is sent and back. pi's stored ids never change.
 - `src/thinking-config.ts`: pi thinking levels as CLI flags and live control requests.
 - `src/account-models.ts`, `src/model-probe.ts`: the model list. The first is pure and loaded at pi start: it joins the account's models with pi's catalogue and implements pi 1.x `refreshModels`. The second asks a short-lived CLI process for the account's models (`initialize`), and is loaded only when a refresh needs it.
@@ -61,7 +62,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 1. pi owns the prompt, active tools, complete tool results and compaction. A Claude process is a disposable cache of pi's history, never a second conversation ledger.
 2. A warm process may continue only when its acknowledged pi-history prefix and launch signature match. Anything else retires it and imports pi's current history into a fresh process. Thinking and the tool list are not in the signature: they are applied to the live process (`applyThinking`, `applyTools`), and only a change the CLI does not take retires it.
 3. Tool calls reach pi as real toolCall blocks; the CLI waits for the matching pi result. The CLI has no native tools.
-4. Nothing is written to pi's status line or to conversation content except the model's own output. Effect's console logger is replaced: logs are span events.
+4. Nothing is written to pi's status line or to conversation content except the model's own output. The one addition to a pi message is the `piClaudeCli` metadata key, which holds the model's signed thinking as the API returned it. Effect's console logger is replaced: logs are span events.
 5. CLI sessions do not persist. No transcript, no resume. Trace files are not a transcript: they hold ids, names, sizes, counts and durations, never prompt text, tool arguments or tool results (unless `PI_CLAUDE_CLI_TRACE_WIRE=raw` is set on purpose).
 6. Preserve host/managed guards and official subscription authentication. Never extract OAuth tokens. Never forward `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` to the CLI.
 7. Report errors as assistant error events and aborts as aborted. Never return a raw string where pi expects an assistant message. Only `src/provider-runtime.ts` and `index.ts` end a pi stream.

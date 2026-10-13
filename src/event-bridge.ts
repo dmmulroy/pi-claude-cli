@@ -14,6 +14,11 @@ import type {
   ThinkingContent,
   ToolCall,
 } from "@earendil-works/pi-ai";
+import {
+  assistantContentFingerprint,
+  type SignedThinking,
+  writeSignedThinking,
+} from "./signed-thinking.ts";
 import { mapClaudeToolNameToPi, isHandoffClaudeTool } from "./tool-mapping.ts";
 
 /** The four token counters, accumulated across the cycles of an episode. */
@@ -48,6 +53,10 @@ interface TrackedContentBlock {
   contentIndex: number;
   /** signature_delta received before any plaintext (encrypted thinking). */
   pendingSignature?: string;
+  /** The whole signature, for the raw block stored beside pi's content. */
+  signature?: string;
+  /** Text and tool call blocks of the message that precede this block. */
+  at?: number;
 }
 
 /** Index given to a block once its `content_block_stop` has arrived. */
@@ -148,6 +157,27 @@ export function createEventBridge(
   };
 
   let started = false;
+
+  /**
+   * The thinking blocks of the API message as it returned them, signatures
+   * included, for a later process to be given back (`src/signed-thinking.ts`).
+   * Kept for an episode of one API message only: blocks of several messages
+   * merged into one pi message could not be replayed as one.
+   */
+  const signedBlocks: Array<SignedThinking["blocks"][number]> = [];
+  const visibleBlockCount = (): number =>
+    output.content.filter((block) => block.type !== "thinking").length;
+  const storeSignedThinking = (): void =>
+    writeSignedThinking(
+      output,
+      cycle === 0
+        ? {
+            model: model.id,
+            fingerprint: assistantContentFingerprint(output.content),
+            blocks: signedBlocks,
+          }
+        : undefined,
+    );
 
   // An episode normally holds one API call ("cycle"), but nothing stops the
   // CLI from making another before the episode ends. SSE content_block
@@ -304,6 +334,8 @@ export function createEventBridge(
           cycleUsage.cache_creation_input_tokens ?? 0;
         cycleUsage = {};
         cycle++;
+        // A second API message in the episode: nothing is replayable.
+        if (cycle > 0) storeSignedThinking();
         handleMessageStart(event);
         break;
       case "content_block_start":
@@ -366,8 +398,19 @@ export function createEventBridge(
         index: event.index ?? 0,
         cycle,
         contentIndex: -1,
+        at: visibleBlockCount(),
       };
       blocks.push(block);
+    } else if (blockType === "redacted_thinking") {
+      // Nothing to show pi, but the API wants it back with the message.
+      const data = event.content_block?.data;
+      if (data !== undefined && data.length > 0) {
+        signedBlocks.push({
+          at: visibleBlockCount(),
+          block: { type: "redacted_thinking", data },
+        });
+        storeSignedThinking();
+      }
     } else if (blockType === "tool_use") {
       const claudeName = event.content_block!.name!;
 
@@ -501,6 +544,7 @@ export function createEventBridge(
       event.delta!.signature != null
     ) {
       if (block.type !== "thinking") return;
+      block.signature = (block.signature ?? "") + event.delta!.signature;
       if (block.contentIndex === -1) {
         // Signature before (or without) any plaintext: hold it in case
         // plaintext follows. If it never does, the block is dropped.
@@ -523,10 +567,26 @@ export function createEventBridge(
     if (idx === -1) return;
     const block = blocks[idx];
 
+    // The raw block is kept whether or not pi has anything to show for it.
+    if (
+      block.type === "thinking" &&
+      block.signature !== undefined &&
+      block.signature.length > 0
+    )
+      signedBlocks.push({
+        at: block.at ?? 0,
+        block: {
+          type: "thinking",
+          thinking: block.text,
+          signature: block.signature,
+        },
+      });
+
     // Encrypted thinking: signature only, no plaintext. Drop it rather than
     // emit a content block with nothing to show.
     if (block.type === "thinking" && block.contentIndex === -1) {
       blocks.splice(idx, 1);
+      storeSignedThinking();
       return;
     }
 
@@ -592,6 +652,8 @@ export function createEventBridge(
         partial: output,
       });
     }
+    // The fingerprint follows the content as each block completes.
+    storeSignedThinking();
   }
 
   function handleMessageDelta(event: ClaudeApiEvent): void {
@@ -661,6 +723,7 @@ export function createEventBridge(
       const tail = finalText.slice(-Math.min(finalText.length, 60));
       if (!streamedText.includes(tail)) {
         appendTextBlock(finalText);
+        storeSignedThinking();
       }
     }
   }

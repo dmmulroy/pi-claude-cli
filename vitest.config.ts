@@ -15,6 +15,7 @@ export default defineConfig({
         "src/event-bridge.ts",
         "src/overflow.ts",
         "src/pi-context.ts",
+        "src/signed-thinking.ts",
         "src/thinking-config.ts",
         "src/tool-call-id.ts",
         "src/tool-mapping.ts",

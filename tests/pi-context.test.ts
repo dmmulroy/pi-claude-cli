@@ -191,6 +191,9 @@ describe("replayPiMessages", () => {
 });
 
 describe("structuredReplay", () => {
+  const MODEL = "claude-haiku-4-5";
+  const replay = (messages: ReadonlyArray<Message>) =>
+    structuredReplay(messages, MODEL);
   const FOREIGN_ID = `call_${"x".repeat(80)}|fc_1`;
   const freeze = <T>(value: T): T => {
     if (typeof value === "object" && value !== null) {
@@ -201,14 +204,13 @@ describe("structuredReplay", () => {
   };
 
   it("replays the history as messages, with real tool calls and results", () => {
-    const frames = structuredReplay([
+    const frames = replay([
       user("look at this"),
       user([
         { type: "text", text: "and this" },
         { type: "image", mimeType: "image/png", data: "QUJD" },
       ]),
       assistant([
-        { type: "thinking", thinking: "not replayed" },
         { type: "text", text: "reading" },
         {
           type: "toolCall",
@@ -259,11 +261,10 @@ describe("structuredReplay", () => {
       { kind: "assistant", content: [{ type: "text", text: "it is missing" }] },
       { kind: "user", content: [{ type: "text", text: "thanks" }] },
     ]);
-    expect(JSON.stringify(frames)).not.toContain("not replayed");
   });
 
   it("maps a tool call id Claude rejects to one valid id on both sides", () => {
-    const frames = structuredReplay([
+    const frames = replay([
       user("go"),
       assistant(
         [{ type: "toolCall", id: FOREIGN_ID, name: "read", arguments: {} }],
@@ -289,13 +290,13 @@ describe("structuredReplay", () => {
       toolResult("file", { toolCallId: FOREIGN_ID }),
     ]);
     const before = JSON.stringify(messages);
-    expect(() => structuredReplay(messages)).not.toThrow();
+    expect(() => replay(messages)).not.toThrow();
     expect(JSON.stringify(messages)).toBe(before);
     expect(before).toContain(FOREIGN_ID);
   });
 
   it("answers a tool call that has no result, before the next user text", () => {
-    const frames = structuredReplay([
+    const frames = replay([
       user("go"),
       assistant([
         { type: "toolCall", id: "toolu_01a", name: "read", arguments: {} },
@@ -325,7 +326,7 @@ describe("structuredReplay", () => {
   });
 
   it("leaves out failed and aborted turns and keeps their results as records", () => {
-    const frames = structuredReplay([
+    const frames = replay([
       user("go"),
       assistant(
         [{ type: "toolCall", id: "toolu_01a", name: "read", arguments: {} }],
@@ -352,7 +353,7 @@ describe("structuredReplay", () => {
   });
 
   it("sends an object for arguments that did not arrive as one", () => {
-    const frames = structuredReplay([
+    const frames = replay([
       user("go"),
       assistant([
         {
@@ -368,7 +369,7 @@ describe("structuredReplay", () => {
   });
 
   it("drops empty text and gives an empty tool result one empty text block", () => {
-    const frames = structuredReplay([
+    const frames = replay([
       user("go"),
       assistant([
         { type: "text", text: "" },
@@ -391,17 +392,17 @@ describe("structuredReplay", () => {
 
   it("declines a history that messages cannot express", () => {
     // Nothing for the model to answer.
-    expect(structuredReplay([])).toBeUndefined();
+    expect(replay([])).toBeUndefined();
     expect(
-      structuredReplay([user("go"), assistant([{ type: "text", text: "a" }])]),
+      replay([user("go"), assistant([{ type: "text", text: "a" }])]),
     ).toBeUndefined();
     // No user message first.
     expect(
-      structuredReplay([assistant([{ type: "text", text: "a" }]), user("b")]),
+      replay([assistant([{ type: "text", text: "a" }]), user("b")]),
     ).toBeUndefined();
     // Two assistant turns in a row.
     expect(
-      structuredReplay([
+      replay([
         user("go"),
         assistant([{ type: "text", text: "a" }]),
         assistant([{ type: "text", text: "b" }]),

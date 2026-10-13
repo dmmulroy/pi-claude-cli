@@ -34,6 +34,7 @@ import {
 import { Type } from "typebox";
 import type { EpisodeOptions } from "../../src/episode.ts";
 import { nodeFileSystemLayer } from "../../src/node-platform.ts";
+import { readSignedThinking } from "../../src/signed-thinking.ts";
 import { isClaudeToolUseId } from "../../src/tool-call-id.ts";
 import {
   providerLayer,
@@ -624,6 +625,57 @@ const scenarios: Record<
       );
     }),
 
+  "signed-thinking-replay": (session) =>
+    Effect.gen(function* () {
+      // The stub's thinking is signed "STUB-SIGNATURE".
+      yield* expectDone(yield* session.say("think about it"), "PORT-OK");
+      // Unchanged history into a fresh process: the block goes back signed.
+      yield* expectDone(yield* session.say("first follow-up"), "PORT-OK");
+      const replayed = (yield* stdinFrames).filter(
+        (frame) => frame.type === "assistant",
+      );
+      yield* expect(
+        replayed.length === 1 &&
+          replayed[0]?.content[0]?.type === "thinking" &&
+          replayed[0].content[0].thinking === "STUB-THOUGHT" &&
+          replayed[0].content[0].signature === "STUB-SIGNATURE",
+        `expected the thinking block replayed with its signature, got ${JSON.stringify(replayed)}`,
+      );
+      // pi's message is edited (as an extension or a branch edit would): the
+      // signature no longer belongs to it.
+      yield* session.update((current) => ({
+        ...current,
+        messages: current.messages.map((message, index) =>
+          index === 1 && message.role === "assistant"
+            ? {
+                ...message,
+                content: message.content.map((block) =>
+                  block.type === "text"
+                    ? { ...block, text: "PORT-OK, edited" }
+                    : block,
+                ),
+              }
+            : message,
+        ),
+      }));
+      yield* expectDone(yield* session.say("second follow-up"), "PORT-OK");
+      const afterEdit = (yield* stdinFrames)
+        .filter((frame) => frame.type === "assistant")
+        .slice(1);
+      yield* expect(
+        afterEdit.length === 2 &&
+          afterEdit[0]?.content[0]?.type === "text" &&
+          afterEdit[0].content[0].text === "STUB-THOUGHT" &&
+          !JSON.stringify(afterEdit[0]).includes("STUB-SIGNATURE"),
+        `expected the edited message's thinking as plain text without a signature, got ${JSON.stringify(afterEdit)}`,
+      );
+      // The untouched later message keeps nothing to sign: it had no thinking.
+      yield* expect(
+        afterEdit[1]?.content.every((block) => block.type === "text") === true,
+        `expected the second assistant message as text, got ${JSON.stringify(afterEdit[1])}`,
+      );
+    }),
+
   "structured-import-refused": (session) =>
     Effect.gen(function* () {
       yield* foreignToolExchange(session);
@@ -739,6 +791,30 @@ const scenarios: Record<
       yield* expectDone(yield* session.call(), "");
       yield* expectDone(
         yield* session.say("Answer with the single word OK."),
+        "",
+      );
+    }),
+
+  "live-structured-import": (session) =>
+    Effect.gen(function* () {
+      const asked = yield* session.say(
+        'Think briefly, then call the read tool once with path "a.txt". After its result, answer with the single word DONE.',
+        { reasoning: "low" },
+      );
+      yield* expectToolCalls(asked, ["read"]);
+      yield* Console.log(
+        `  signed thinking blocks stored on pi's message: ${readSignedThinking(asked)?.blocks.length ?? 0}`,
+      );
+      yield* session.answerToolCalls("the file says: hello");
+      // No process to continue on: the history, open tool call and signed
+      // thinking included, goes into a fresh one as messages.
+      yield* session.retireParked;
+      yield* expectDone(yield* session.call({ reasoning: "low" }), "");
+      yield* session.retireParked;
+      yield* expectDone(
+        yield* session.say("Answer with the single word OK.", {
+          reasoning: "low",
+        }),
         "",
       );
     }),

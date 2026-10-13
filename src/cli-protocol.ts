@@ -9,6 +9,7 @@
  */
 
 import { Option, Schema } from "effect";
+import type { SignedThinkingBlock } from "./signed-thinking.ts";
 import type { ThinkingControl } from "./thinking-config.ts";
 
 // ---- stdout: model stream ---------------------------------------------------
@@ -51,6 +52,8 @@ const ClaudeApiEvent = Schema.Struct({
       text: Schema.optional(Schema.String),
       id: Schema.optional(Schema.String),
       name: Schema.optional(Schema.String),
+      /** The opaque payload of a `redacted_thinking` block. */
+      data: Schema.optional(Schema.String),
     }),
   ),
   delta: Schema.optional(
@@ -323,6 +326,8 @@ export type CliUserContentBlock =
 /** One content block of a replayed assistant message. */
 export type CliAssistantContentBlock =
   | { readonly type: "text"; readonly text: string }
+  /** Signed thinking, exactly as the API returned it. */
+  | SignedThinkingBlock
   | {
       readonly type: "tool_use";
       readonly id: string;

@@ -18,6 +18,8 @@
  *                   "TOOL-DONE <result text>" and ends the turn
  *   tools:<a>,<b>   the same with several tool_use blocks in one message and
  *                   every call open at once; results are joined with "|"
+ *   think           streams a signed thinking block ("STUB-THOUGHT",
+ *                   signature "STUB-SIGNATURE"), then "PORT-OK"
  *   hang            starts a message and never finishes it
  *   orphan          like hang, after starting a child process of its own
  *                   that ignores SIGTERM and outlives a plain kill of the
@@ -288,6 +290,30 @@ const startTurn = (text) => {
   const tool = /tools?:([A-Za-z0-9_,-]+)/.exec(text);
   if (tool) {
     toolTurn(tool[1].split(",")).catch(endInterruptedTurn);
+    return;
+  }
+  if (text.includes("think")) {
+    messageStart();
+    streamEvent({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "thinking", thinking: "", signature: "" },
+    });
+    streamEvent({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "thinking_delta", thinking: "STUB-THOUGHT" },
+    });
+    streamEvent({
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "signature_delta", signature: "STUB-SIGNATURE" },
+    });
+    streamEvent({ type: "content_block_stop", index: 0 });
+    textBlock(1, "PORT-OK");
+    messageEnd("end_turn");
+    turnActive = false;
+    success();
     return;
   }
   if (text.includes("chatter")) {

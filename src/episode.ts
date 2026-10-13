@@ -286,7 +286,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     // The history as the messages themselves, when asked for and possible.
     const frames =
       config.historyImport === "structured"
-        ? Option.fromUndefinedOr(structuredReplay(messages))
+        ? Option.fromUndefinedOr(structuredReplay(messages, model.id))
         : Option.none();
     const first = yield* launchProcess;
     if (Option.isNone(frames) || !first.takesStructuredImport) {

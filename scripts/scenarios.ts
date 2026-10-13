@@ -428,6 +428,23 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     },
   ),
   scenario(
+    "signed-thinking-replay",
+    "a fresh process gets signed thinking back only while pi's message is unchanged",
+    [
+      [...episode("mode=spawn", "import=structured"), ...count(3)],
+      [
+        ...span("ClaudeProcess.importHistory", "acknowledged=true"),
+        ...count(3),
+      ],
+    ],
+    {
+      env: {
+        PI_CLAUDE_CLI_IMPORT: "structured",
+        PI_CLAUDE_CLI_KEEPALIVE_MS: "0",
+      },
+    },
+  ),
+  scenario(
     "structured-import-refused",
     "a CLI that answers a held message is retired and the history imported as text into a fresh process",
     [
@@ -663,6 +680,24 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       [...span("ClaudeCli.spawn"), ...count(1)],
     ],
     { live: true },
+  ),
+  scenario(
+    "live-structured-import",
+    "LIVE: a history with an open tool call and signed thinking, imported as messages into fresh processes",
+    [
+      [...episode("mode=spawn", "import=structured"), ...count(3)],
+      [
+        ...episode("mode=spawn", "import=structured", "outcome=done"),
+        ...count(2),
+      ],
+      [
+        ...span("ClaudeProcess.importHistory", "acknowledged=true"),
+        ...count(3),
+      ],
+      [...span("ClaudeProcess.retire", "cause=import"), "--max-count", "0"],
+      [...span("ClaudeCli.spawn"), ...count(3)],
+    ],
+    { live: true, env: { PI_CLAUDE_CLI_IMPORT: "structured" } },
   ),
   scenario(
     "live-parallel-tools",
