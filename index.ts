@@ -19,11 +19,15 @@ import {
 import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  accountModelsEnabled,
+  builtinProviderModels,
+  createModelRefresh,
+} from "./src/account-models.ts";
 import { createEventBridge } from "./src/event-bridge.ts";
 import { rewriteOverflowMessage } from "./src/overflow.ts";
 import type { ProviderRuntime } from "./src/provider-runtime.ts";
 import { endStreamWithError } from "./src/terminal-event.ts";
-import { cliThinkingLevelMap } from "./src/thinking-config.ts";
 
 const PROVIDER_ID = "pi-claude-cli";
 
@@ -46,19 +50,14 @@ function failStream(
 
 export default function (pi: ExtensionAPI) {
   try {
-    const models = getModels("anthropic").map((model) => ({
-      id: model.id,
-      name: model.name,
-      reasoning: model.reasoning,
-      input: model.input,
-      cost: model.cost,
-      contextWindow: model.contextWindow,
-      maxTokens: model.maxTokens,
-      // pi's own per-model map, less `minimal` on adaptive models (it would
-      // send what `low` sends), so the selector offers only levels the model
-      // has, and each maps to the effort pi uses.
-      thinkingLevelMap: cliThinkingLevelMap(model),
-    }));
+    const catalogue = getModels("anthropic");
+    // Until pi has refreshed (and on a pi without dynamic models) the list
+    // is pi's whole Anthropic catalogue.
+    const models = builtinProviderModels(catalogue);
+    // The probe is loaded on demand: it brings Effect with it.
+    const refreshModels = createModelRefresh(catalogue, async (signal) =>
+      (await import("./src/model-probe.ts")).probeAccountModels(signal),
+    );
 
     // One runtime per extension instance: pi calls this factory once per
     // session and emits `session_shutdown` before tearing it down.
@@ -124,6 +123,9 @@ export default function (pi: ExtensionAPI) {
       apiKey: "unused",
       api: "pi-claude-cli",
       models,
+      // pi 1.x calls this to refresh the list; earlier versions ignore it
+      // and keep the built-in catalogue above.
+      ...(accountModelsEnabled() ? { refreshModels } : {}),
       streamSimple,
     });
   } catch (err) {

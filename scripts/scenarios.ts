@@ -556,6 +556,30 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     },
   ),
   scenario(
+    "model-probe",
+    "the account's models come from one initialize request to a short-lived CLI process",
+    [
+      [
+        ...span("ModelProbe.requestAccountModels", "models=2"),
+        "--status",
+        "ok",
+        ...count(1),
+        "--max-ms",
+        "5000",
+      ],
+      [...span("ModelProbe.requestAccountModels", "models=0"), ...count(1)],
+      // The probe never serves a model call.
+      [...episode(), "--max-count", "0"],
+    ],
+    {
+      command: { _tag: "Script", path: "scripts/scenarios/model-probe.ts" },
+      env: {
+        ANTHROPIC_API_KEY: "sk-scenario-must-not-leak",
+        ANTHROPIC_BASE_URL: "http://127.0.0.1:9",
+      },
+    },
+  ),
+  scenario(
     "trace-default-location",
     "with no PI_CLAUDE_CLI_TRACE the sink writes a private daily file and prunes old ones",
     [],

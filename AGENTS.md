@@ -51,6 +51,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - `src/event-bridge.ts`: convert CLI stream events to pi messages. Content indexes restart each model cycle, so blocks are tracked by `(cycle, index)`.
 - `src/pi-context.ts`: normalize old/new pi context formats, import ordered messages and images, hash acknowledged history.
 - `src/thinking-config.ts`: pi thinking levels as CLI flags and live control requests.
+- `src/account-models.ts`, `src/model-probe.ts`: the model list. The first is pure and loaded at pi start: it joins the account's models with pi's catalogue and implements pi 1.x `refreshModels`. The second asks a short-lived CLI process for the account's models (`initialize`), and is loaded only when a refresh needs it.
 - `src/provider-config.ts`, `src/runtime-directory.ts`, `src/usage.ts`, `src/errors.ts`, `src/cli-requirements.ts`: configuration, the private temp directory, billing arithmetic, tagged errors, minimum CLI version.
 - `src/tracing.ts`, `src/trace-location.ts`, `scripts/trace.ts`: the span sink and the trace CLI.
 
@@ -66,7 +67,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 
 ## Conventions
 
-- Effect everywhere, including scripts, following `docs/coding-standards.md`. The exceptions are `index.ts` and what it imports eagerly (`event-bridge`, `overflow`, `thinking-config`, `terminal-event`), which must not import Effect, and the stub CLI.
+- Effect everywhere, including scripts, following `docs/coding-standards.md`. The exceptions are `index.ts` and what it imports eagerly (`account-models`, `event-bridge`, `overflow`, `thinking-config`, `terminal-event`), which must not import Effect, and the stub CLI.
 - Layers never fail. A failed layer build is remembered for the life of the runtime; record the failure in the service and report it per episode instead.
 - Never await a `retire` on a path that ends pi's stream; use `pool.retireInBackground`.
 - The package is an ES module and local TypeScript is imported with `.ts` specifiers, so `node scripts/x.ts` runs under Node's type stripping (Node 22.18+). That rules out enums, namespaces and parameter properties.

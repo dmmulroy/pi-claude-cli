@@ -159,10 +159,12 @@ export function resolveCliThinking(
  * checked against Claude Code's own per-model report (`initialize` ->
  * `models[].supportedEffortLevels`, claude 2.1.283): they agree on every
  * model, including xhigh missing on Opus/Sonnet 4.6 and `off` missing on the
- * Opus 5 family. The report is not used at runtime because it adds nothing
- * pi's map lacks: it ignores `maxEffortLevel` limits, and its model list is
- * Claude Code's picker, not access (Opus 4.5 and Sonnet 4.5 are absent from
- * it and run fine).
+ * Opus 5 family. The report's effort levels are not used at runtime because
+ * they add nothing pi's map lacks and ignore `maxEffortLevel` limits. Its
+ * model list is used, to pick which catalogue models the provider offers
+ * (`src/account-models.ts`); it is Claude Code's picker for the account,
+ * not an access check (Opus 4.5 and Sonnet 4.5 are absent from it and run
+ * fine), which is why `PI_CLAUDE_CLI_MODELS=builtin` exists.
  */
 export function cliThinkingLevelMap(model: {
   thinkingLevelMap?: ThinkingLevelMap | null;

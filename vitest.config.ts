@@ -11,6 +11,7 @@ export default defineConfig({
       // The modules unit tests cover: the ones that stay pure. The Effect
       // services are gated by `npm run test:scenarios` instead.
       include: [
+        "src/account-models.ts",
         "src/event-bridge.ts",
         "src/overflow.ts",
         "src/pi-context.ts",

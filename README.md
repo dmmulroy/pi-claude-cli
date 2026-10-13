@@ -48,12 +48,19 @@ No environment variables are required.
 | `PI_CLAUDE_CLI_TRACE_WIRE`       | counts       | `1` records one event per wire message; `raw` records raw lines, with content  |
 | `PI_CLAUDE_CLI_THINKING_DISPLAY` | `summarized` | `omitted` returns no thinking summaries                                        |
 | `MCP_TOOL_TIMEOUT`               | `3600000`    | CLI-side MCP call timeout                                                      |
+| `PI_CLAUDE_CLI_MODELS`           | account      | `builtin` lists pi's whole Anthropic catalogue instead of the account's models |
 
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are never forwarded to the CLI: any of them would move it off the subscription login. A value that does not parse falls back to its default.
 
 pi's thinking levels reach the model as the request pi's own Anthropic provider would send: `off` disables thinking, other levels send pi's budget or effort with thinking summaries. A level changed mid-session applies from the next turn without restarting the CLI.
 
 A changed tool list also reaches the live process: the in-band MCP server tells the CLI its tools changed, the CLI lists them again, and the model is offered the new list from its next request, including the one that follows an open tool call.
+
+## Models
+
+On pi 1.x the model list is the account's. Claude Code reports the models an account offers in its `initialize` handshake; the provider asks a short-lived CLI process for them (no model call, no tokens), keeps the ones pi's Anthropic catalogue knows with pi's own limits, cost and thinking levels, and adds any the catalogue does not know yet with conservative limits. pi persists the result, so a session starts from the stored list and the CLI is asked again when it is a day old or pi forces a refresh. Until the first refresh, when the CLI cannot be asked, and on pi before 1.x, the list is pi's whole Anthropic catalogue.
+
+The CLI's list is its model picker for the account, not a hard access check: a model missing from it may still run. `PI_CLAUDE_CLI_MODELS=builtin` keeps the whole catalogue.
 
 ## Traces
 

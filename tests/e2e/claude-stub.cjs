@@ -34,6 +34,7 @@
  *                           the provider controls
  *   CLAUDE_STUB_TOOLS_FILE  append the tool names the MCP server listed
  *   CLAUDE_STUB_CHILD_PID_FILE  where `orphan` writes its child's pid
+ *   CLAUDE_STUB_MODELS      JSON for `models` in the `initialize` response
  *   CLAUDE_STUB_REFUSE_CONTROL=1  refuse thinking control requests
  *   CLAUDE_STUB_IGNORE_TOOLS_CHANGED=1  acknowledge a tools/list_changed
  *                           notification without listing the tools again,
@@ -382,6 +383,33 @@ const handleLine = (line) => {
         interruptTurn = undefined;
         interrupt(new Error("interrupted"));
       }
+      return;
+    }
+    if (msg.request?.subtype === "initialize") {
+      // The handshake: what the account offers, as Claude Code reports it.
+      emit({
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: msg.request_id,
+          response: {
+            models: process.env.CLAUDE_STUB_MODELS
+              ? JSON.parse(process.env.CLAUDE_STUB_MODELS)
+              : [
+                  {
+                    value: "default",
+                    resolvedModel: "claude-sonnet-5",
+                    displayName: "Default (recommended)",
+                  },
+                  {
+                    value: "haiku",
+                    resolvedModel: "claude-haiku-4-5-20251001",
+                    displayName: "Haiku",
+                  },
+                ],
+          },
+        },
+      });
       return;
     }
     if (msg.request?.subtype === "mcp_message") {
