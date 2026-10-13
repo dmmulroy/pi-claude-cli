@@ -212,6 +212,41 @@ const readStubFile = (name: string) =>
     return yield* fs.readFileString(path.join(yield* scenarioDirectory, name));
   });
 
+/** The pid of the process the stub started for the `orphan` keyword. */
+const stubChildPid = Effect.gen(function* () {
+  const pid = Number((yield* readStubFile("child.pid")).trim());
+  yield* expect(
+    Number.isInteger(pid) && pid > 0,
+    `expected the stub to record its child's pid, got ${pid}`,
+  );
+  return pid;
+});
+
+const isProcessRunning = (pid: number) =>
+  Effect.sync(() => {
+    try {
+      // Signal 0 only checks that the process exists.
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
+/** The process is gone within the time a background retire may take. */
+const expectProcessGone = (pid: number) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 60; attempt++) {
+      if (!(yield* isProcessRunning(pid))) return;
+      yield* Effect.sleep("50 millis");
+    }
+    // Do not leave it behind when the expectation fails.
+    yield* Effect.sync(() => process.kill(pid, "SIGKILL")).pipe(Effect.ignore);
+    yield* new ScenarioExpectationFailed({
+      message: `expected process ${pid}, started by the CLI, to die with it`,
+    });
+  });
+
 const toolRoundTrip = (session: ScenarioSession) =>
   Effect.gen(function* () {
     const asked = yield* session.say("please tool:read");
@@ -452,6 +487,31 @@ const scenarios: Record<
     Effect.gen(function* () {
       yield* expectError(yield* session.say("hang"), "error", "timed out");
       yield* Effect.sleep("300 millis");
+    }),
+
+  "idle-control-traffic": (session) =>
+    Effect.gen(function* () {
+      yield* expectDone(yield* session.say("chatter"), "PORT-OK");
+    }),
+
+  "process-group-killed": (session) =>
+    Effect.gen(function* () {
+      yield* expectError(yield* session.say("orphan"), "error", "timed out");
+      yield* expectProcessGone(yield* stubChildPid);
+    }),
+
+  "abort-kills-process-group": (session) =>
+    Effect.gen(function* () {
+      const controller = new AbortController();
+      const answer = yield* session.say(
+        "orphan",
+        { signal: controller.signal },
+        (event) => {
+          if (event.type === "text_delta") controller.abort();
+        },
+      );
+      yield* expectError(answer, "aborted", "Request aborted");
+      yield* expectProcessGone(yield* stubChildPid);
     }),
 
   "process-dies": (session) =>

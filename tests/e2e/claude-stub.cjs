@@ -19,6 +19,12 @@
  *   tools:<a>,<b>   the same with several tool_use blocks in one message and
  *                   every call open at once; results are joined with "|"
  *   hang            starts a message and never finishes it
+ *   orphan          like hang, after starting a child process of its own
+ *                   that ignores SIGTERM and outlives a plain kill of the
+ *                   stub; its pid goes to CLAUDE_STUB_CHILD_PID_FILE
+ *   chatter         stays silent on the model stream for 600 ms while
+ *                   pinging the in-band MCP server every 100 ms, then
+ *                   answers "PORT-OK"
  *   die             starts a message, writes to stderr, exits with code 3
  *   failturn        ends the turn with an error result
  *
@@ -27,6 +33,7 @@
  *   CLAUDE_STUB_ENV_FILE    write what this process sees of the environment
  *                           the provider controls
  *   CLAUDE_STUB_TOOLS_FILE  append the tool names the MCP server listed
+ *   CLAUDE_STUB_CHILD_PID_FILE  where `orphan` writes its child's pid
  *   CLAUDE_STUB_REFUSE_CONTROL=1  refuse thinking control requests
  *   CLAUDE_STUB_IGNORE_TOOLS_CHANGED=1  acknowledge a tools/list_changed
  *                           notification without listing the tools again,
@@ -277,7 +284,34 @@ const startTurn = (text) => {
     toolTurn(tool[1].split(",")).catch(endInterruptedTurn);
     return;
   }
-  if (text.includes("hang")) {
+  if (text.includes("chatter")) {
+    // Alive, but with nothing for pi's stream: only control traffic.
+    let pings = 0;
+    const ping = () => {
+      mcp("ping");
+      if (++pings < 6) return setTimeout(ping, 100);
+      cycle("PORT-OK");
+      turnActive = false;
+      success();
+    };
+    setTimeout(ping, 100);
+    return;
+  }
+  if (text.includes("orphan")) {
+    // A process of the CLI's own, in the CLI's process group. It has no pipe
+    // to notice the stub's death by, so only a group kill ends it.
+    const child = require("node:child_process").spawn(
+      process.execPath,
+      ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+      { stdio: "ignore" },
+    );
+    if (process.env.CLAUDE_STUB_CHILD_PID_FILE)
+      fs.writeFileSync(
+        process.env.CLAUDE_STUB_CHILD_PID_FILE,
+        String(child.pid),
+      );
+  }
+  if (text.includes("hang") || text.includes("orphan")) {
     messageStart();
     streamEvent({
       type: "content_block_start",

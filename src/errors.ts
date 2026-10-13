@@ -55,12 +55,15 @@ export class CliResultError extends Data.TaggedError("CliResultError")<{
   readonly message: string;
 }> {}
 
-/** The CLI wrote nothing to stdout for the configured inactivity timeout. */
+/**
+ * The CLI wrote nothing to stdout for the configured idle timeout
+ * (`PI_CLAUDE_CLI_TIMEOUT_MS`) while pi was waiting for it.
+ */
 export class InactivityTimeout extends Data.TaggedError("InactivityTimeout")<{
   readonly seconds: number;
 }> {
   override get message(): string {
-    return `Claude CLI subprocess timed out: no output for ${this.seconds} seconds`;
+    return `Claude CLI stalled: it timed out after ${this.seconds} seconds without output and was stopped. Retry the request; raise PI_CLAUDE_CLI_TIMEOUT_MS (milliseconds) if the model legitimately needs longer.`;
   }
 }
 

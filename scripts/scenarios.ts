@@ -379,6 +379,34 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     { env: { PI_CLAUDE_CLI_TIMEOUT_MS: "350" } },
   ),
   scenario(
+    "idle-control-traffic",
+    "a CLI that is silent on the model stream but busy on the control channel is not stalled",
+    [
+      [...episode("outcome=done"), ...count(1), "--min-ms", "500"],
+      [...span("ClaudeProcess.retire", "cause=timeout"), "--max-count", "0"],
+    ],
+    { env: { PI_CLAUDE_CLI_TIMEOUT_MS: "350" } },
+  ),
+  scenario(
+    "process-group-killed",
+    "retiring a stalled CLI kills the processes it started with it",
+    [
+      [
+        ...span("ClaudeProcess.retire", "cause=timeout", "ended=killed"),
+        ...count(1),
+      ],
+    ],
+    { env: { PI_CLAUDE_CLI_TIMEOUT_MS: "350" } },
+  ),
+  scenario(
+    "abort-kills-process-group",
+    "an aborted call ends the CLI's whole process group",
+    [
+      [...episode("outcome=aborted"), ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=abort"), ...count(1)],
+    ],
+  ),
+  scenario(
     "process-dies",
     "a process that dies mid-turn fails the episode with its stderr",
     [
@@ -712,6 +740,7 @@ const runScenario = Effect.fn("Scenarios.run")(function* (
       CLAUDE_STUB_ARGV_FILE: path.join(work, "argv.jsonl"),
       CLAUDE_STUB_ENV_FILE: path.join(work, "env.json"),
       CLAUDE_STUB_TOOLS_FILE: path.join(work, "tools.jsonl"),
+      CLAUDE_STUB_CHILD_PID_FILE: path.join(work, "child.pid"),
       ...scenario.env,
     },
   );

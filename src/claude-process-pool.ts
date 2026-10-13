@@ -70,21 +70,37 @@ interface ParkedProcess {
 }
 
 /**
- * Kill every live CLI process when pi exits without the runtime having been
- * disposed. Effect finalizers cannot run in an `exit` handler, so this last
- * resort is synchronous.
+ * Kill one CLI process and everything it started. Each CLI leads its own
+ * process group (`src/claude-cli.ts` spawns it detached), so the negative
+ * pid addresses the whole group; the plain pid is the fallback for a process
+ * that turned out not to lead one. Synchronous, for use in an `exit` handler.
+ */
+export const killProcessGroup = (
+  pid: number,
+  kill: (pid: number, signal: NodeJS.Signals) => void = process.kill.bind(
+    process,
+  ),
+): void => {
+  for (const target of [-pid, pid]) {
+    try {
+      kill(target, "SIGKILL");
+      return;
+    } catch {
+      // No such group, or already gone: try the process itself.
+    }
+  }
+};
+
+/**
+ * Kill every live CLI process group when pi exits without the runtime having
+ * been disposed. Effect finalizers cannot run in an `exit` handler, so this
+ * last resort is synchronous.
  */
 const killOnProcessExit = (livePids: Set<number>) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const kill = () => {
-        for (const pid of livePids) {
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {
-            // Already gone.
-          }
-        }
+        for (const pid of livePids) killProcessGroup(pid);
       };
       process.on("exit", kill);
       return kill;

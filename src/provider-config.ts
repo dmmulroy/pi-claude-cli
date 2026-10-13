@@ -13,7 +13,11 @@ export type TraceWireDetail = "counts" | "events" | "raw";
 
 /** Defines the provider configuration read from the environment. */
 export interface IProviderConfig {
-  /** Longest stdout silence tolerated while an episode is attached. */
+  /**
+   * Longest stdout silence tolerated while an episode is attached
+   * (`PI_CLAUDE_CLI_TIMEOUT_MS`, default five minutes). Past it the episode
+   * fails with `InactivityTimeout` and the process group is killed.
+   */
   readonly inactivityTimeout: Duration.Duration;
   /** Idle lifetime of a process parked after a turn; none parks nothing. */
   readonly keepalive: Option.Option<Duration.Duration>;

@@ -307,19 +307,35 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
       }),
     );
 
+    /**
+     * The next message for this episode, or `InactivityTimeout` once the CLI
+     * has written nothing to stdout for the idle timeout. Idleness is the
+     * process's, not the inbox's: control traffic the reader answers itself
+     * never reaches the inbox and still proves the CLI is alive.
+     */
+    const takeMessage = Effect.gen(function* () {
+      const limitMillis = Duration.toMillis(config.inactivityTimeout);
+      while (true) {
+        const quietSince = Math.max(
+          startedAtMillis,
+          yield* process.lastOutputAtMillis,
+        );
+        const remainingMillis =
+          limitMillis - ((yield* Clock.currentTimeMillis) - quietSince);
+        if (remainingMillis <= 0)
+          return yield* new InactivityTimeout({
+            seconds: Duration.toSeconds(config.inactivityTimeout),
+          });
+        const taken = yield* Queue.take(process.inbox).pipe(
+          Effect.timeoutOption(Duration.millis(remainingMillis)),
+        );
+        if (Option.isSome(taken)) return taken.value;
+      }
+    });
+
     const read = Effect.gen(function* () {
       while (true) {
-        const message = yield* Queue.take(process.inbox).pipe(
-          Effect.timeoutOrElse({
-            duration: config.inactivityTimeout,
-            orElse: () =>
-              Effect.fail(
-                new InactivityTimeout({
-                  seconds: Duration.toSeconds(config.inactivityTimeout),
-                }),
-              ),
-          }),
-        );
+        const message = yield* takeMessage;
         const label = cliMessageLabel(message);
         wireCounts.set(label, (wireCounts.get(label) ?? 0) + 1);
         if (config.traceWireDetail !== "counts" && Option.isSome(episodeSpan))

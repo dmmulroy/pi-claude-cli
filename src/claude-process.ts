@@ -18,6 +18,7 @@
 
 import {
   type Cause,
+  Clock,
   Deferred,
   Duration,
   Effect,
@@ -79,7 +80,7 @@ export type RetireCause =
   | "tools"
   /** The episode it was serving failed. */
   | "failure"
-  /** It stopped writing to stdout; killed without a grace period. */
+  /** It stopped writing to stdout; its process group is killed without a grace period. */
   | "timeout"
   /** pi aborted the episode it was serving. */
   | "abort"
@@ -136,6 +137,11 @@ export interface IClaudeProcess {
   /** The pool's idle timer; lives and dies with the process. */
   readonly idleTimer: FiberHandle.FiberHandle<void>;
   readonly isAlive: Effect.Effect<boolean>;
+  /**
+   * When the CLI last wrote a line to stdout, of any kind: stream events,
+   * control traffic the reader answers itself, and lines that are not JSON.
+   */
+  readonly lastOutputAtMillis: Effect.Effect<number>;
   /** A user message has been written and no `result` has followed yet. */
   readonly isTurnActive: Effect.Effect<boolean>;
   /** Start a turn. Fails with `ProcessGone` when the process has ended. */
@@ -254,6 +260,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   const retiring = yield* Ref.make(false);
   const retired = yield* Deferred.make<void>();
   const killWithoutGrace = yield* Ref.make(false);
+  const lastOutputAt = yield* Ref.make(yield* Clock.currentTimeMillis);
   const endedBy = yield* Ref.make<"exited" | "killed">("exited");
 
   const handle = yield* cli.spawn({
@@ -484,6 +491,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     Stream.splitLines,
     Stream.runForEach((line) =>
       Effect.gen(function* () {
+        yield* Ref.set(lastOutputAt, yield* Clock.currentTimeMillis);
         if (launch.traceRawWire)
           yield* recordSpanEvent(span, "wire raw", { line });
         const message = decodeCliLine(line);
@@ -623,6 +631,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     turnReported: yield* Ref.make(ZERO_TOKEN_USAGE),
     idleTimer,
     isAlive: Ref.get(alive),
+    lastOutputAtMillis: Ref.get(lastOutputAt),
     isTurnActive: Ref.get(turnActive),
     writeUser: (content) =>
       Effect.gen(function* () {

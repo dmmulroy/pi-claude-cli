@@ -41,7 +41,7 @@ No environment variables are required.
 | -------------------------------- | ------------ | ------------------------------------------------------------------------------ |
 | `PI_CLAUDE_CLI_KEEPALIVE_MS`     | `600000`     | Idle lifetime of a parked process; `0` parks nothing                           |
 | `PI_CLAUDE_CLI_SETTINGS`         | unset        | Explicit Claude Code settings file (hooks, permissions) passed as `--settings` |
-| `PI_CLAUDE_CLI_TIMEOUT_MS`       | `300000`     | Maximum stdout inactivity while a call is attached                             |
+| `PI_CLAUDE_CLI_TIMEOUT_MS`       | `300000`     | Longest stdout silence while a call is attached; then an error and a kill      |
 | `PI_CLAUDE_CLI_HANDOFF_WAIT_MS`  | `1800000`    | Maximum wait for pi to answer a tool call                                      |
 | `PI_CLAUDE_CLI_HANDOFF_PROXY`    | on           | `0` interrupts the turn at each tool call instead of holding it open           |
 | `PI_CLAUDE_CLI_TRACE`            | daily file   | Trace file path, or `off`; see [Traces](#traces)                               |
