@@ -35,6 +35,11 @@
  *   CLAUDE_STUB_TOOLS_FILE  append the tool names the MCP server listed
  *   CLAUDE_STUB_CHILD_PID_FILE  where `orphan` writes its child's pid
  *   CLAUDE_STUB_MODELS      JSON for `models` in the `initialize` response
+ *   CLAUDE_STUB_FRAMES_FILE append each user and assistant message read from
+ *                           stdin, with whether it was held
+ *   CLAUDE_STUB_QUERY_HELD=1  answer a held user message (`shouldQuery:
+ *                           false`) with a model turn, as a CLI that does
+ *                           not know the field would
  *   CLAUDE_STUB_REFUSE_CONTROL=1  refuse thinking control requests
  *   CLAUDE_STUB_IGNORE_TOOLS_CHANGED=1  acknowledge a tools/list_changed
  *                           notification without listing the tools again,
@@ -436,6 +441,38 @@ const handleLine = (line) => {
               error: "stub refuses control requests",
             }
           : { subtype: "success", request_id: msg.request_id },
+    });
+    return;
+  }
+  if (msg.type === "user" || msg.type === "assistant") {
+    if (process.env.CLAUDE_STUB_FRAMES_FILE)
+      fs.appendFileSync(
+        process.env.CLAUDE_STUB_FRAMES_FILE,
+        JSON.stringify({
+          type: msg.type,
+          held: msg.shouldQuery === false,
+          model: msg.message?.model ?? null,
+          content: msg.message?.content,
+        }) + "\n",
+      );
+  }
+  // A replayed assistant message is appended to the conversation; no answer.
+  if (msg.type === "assistant") return;
+  if (
+    msg.type === "user" &&
+    msg.shouldQuery === false &&
+    process.env.CLAUDE_STUB_QUERY_HELD !== "1"
+  ) {
+    // Held: added to the conversation without a model call, then confirmed
+    // with an empty result, as Claude Code 2.1.292 does.
+    mcpReady.then(() => {
+      emit({ type: "system", subtype: "init", session_id: "stub-session" });
+      emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        num_turns: 0,
+      });
     });
     return;
   }

@@ -297,8 +297,8 @@ export const decodeMcpCancelledRequestId = (
 
 // ---- stdin ------------------------------------------------------------------
 
-/** One content block of a user message, in the Anthropic API's encoding. */
-export type CliUserContentBlock =
+/** Text or an image, in the Anthropic API's encoding. */
+export type CliTextOrImageBlock =
   | { readonly type: "text"; readonly text: string }
   | {
       readonly type: "image";
@@ -307,6 +307,27 @@ export type CliUserContentBlock =
         readonly media_type: string;
         readonly data: string;
       };
+    };
+
+/** One content block of a user message, in the Anthropic API's encoding. */
+export type CliUserContentBlock =
+  | CliTextOrImageBlock
+  | {
+      /** The result of an earlier `tool_use`; only in a replayed history. */
+      readonly type: "tool_result";
+      readonly tool_use_id: string;
+      readonly content: ReadonlyArray<CliTextOrImageBlock>;
+      readonly is_error: boolean;
+    };
+
+/** One content block of a replayed assistant message. */
+export type CliAssistantContentBlock =
+  | { readonly type: "text"; readonly text: string }
+  | {
+      readonly type: "tool_use";
+      readonly id: string;
+      readonly name: string;
+      readonly input: Readonly<Record<string, unknown>>;
     };
 
 /** A JSON-RPC response for the CLI's MCP client. */
@@ -324,10 +345,35 @@ export type McpResponse =
 
 const line = (value: unknown): string => JSON.stringify(value) + "\n";
 
-/** A user turn. */
+/**
+ * A user message. By default it starts a turn. With `hold` it is added to
+ * the CLI's conversation without asking the model (`shouldQuery: false`),
+ * and the CLI answers with an empty `result`: how a history is replayed.
+ */
 export const userMessageLine = (
   content: ReadonlyArray<CliUserContentBlock>,
-): string => line({ type: "user", message: { role: "user", content } });
+  options: { readonly hold?: boolean } = {},
+): string =>
+  line({
+    type: "user",
+    message: { role: "user", content },
+    ...(options.hold === true ? { shouldQuery: false } : {}),
+  });
+
+/**
+ * An assistant message of a replayed history. The CLI appends it to its
+ * conversation as it is and answers nothing. `modelId` must be the model the
+ * process runs: the CLI removes thinking blocks from an assistant message
+ * that names another model, or none.
+ */
+export const assistantReplayLine = (
+  modelId: string,
+  content: ReadonlyArray<CliAssistantContentBlock>,
+): string =>
+  line({
+    type: "assistant",
+    message: { role: "assistant", model: modelId, content },
+  });
 
 /**
  * A control request of ours. `interrupt` ends the running turn the way Esc

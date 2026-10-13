@@ -16,6 +16,7 @@ export default defineConfig({
         "src/overflow.ts",
         "src/pi-context.ts",
         "src/thinking-config.ts",
+        "src/tool-call-id.ts",
         "src/tool-mapping.ts",
       ],
       thresholds: {

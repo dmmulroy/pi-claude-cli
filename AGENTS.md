@@ -49,7 +49,8 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - `src/mcp-inband.ts`: the in-band (`"type": "sdk"`) MCP server that advertises pi's tools on the CLI's own control channel. No socket, no helper process, no secret. A `tools/call` is held open until pi's next call delivers the result, matched on the actual tool-use id and name. A changed tool list is announced with `notifications/tools/list_changed` and confirmed by the CLI's next `tools/list`.
 - `src/cli-protocol.ts`: lenient `Schema` decoding of the CLI's NDJSON; builders for stdin lines.
 - `src/event-bridge.ts`: convert CLI stream events to pi messages. Content indexes restart each model cycle, so blocks are tracked by `(cycle, index)`.
-- `src/pi-context.ts`: normalize old/new pi context formats, import ordered messages and images, hash acknowledged history.
+- `src/pi-context.ts`: normalize old/new pi context formats, import ordered messages and images (as labelled text, or as structured frames with `PI_CLAUDE_CLI_IMPORT=structured`), hash acknowledged history.
+- `src/tool-call-id.ts`: tool call ids Claude would reject, mapped to valid ones in what is sent and back. pi's stored ids never change.
 - `src/thinking-config.ts`: pi thinking levels as CLI flags and live control requests.
 - `src/account-models.ts`, `src/model-probe.ts`: the model list. The first is pure and loaded at pi start: it joins the account's models with pi's catalogue and implements pi 1.x `refreshModels`. The second asks a short-lived CLI process for the account's models (`initialize`), and is loaded only when a refresh needs it.
 - `src/provider-config.ts`, `src/runtime-directory.ts`, `src/usage.ts`, `src/errors.ts`, `src/cli-requirements.ts`: configuration, the private temp directory, billing arithmetic, tagged errors, minimum CLI version.

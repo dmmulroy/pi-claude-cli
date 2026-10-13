@@ -29,7 +29,13 @@ Reuse requires an unchanged history prefix and launch signature (model, system p
 
 Model selection, session start, tree navigation and compaction retire parked processes; session shutdown disposes the whole runtime, which ends every process and removes the private runtime directory. Session-map and saved-prompt sidecars written by upstream versions before 0.9.0 are neither read nor deleted.
 
-A CLI import uses ordered, role-labelled content because print mode does not accept an arbitrary structured transcript. Every supplied user/tool image and tool result is retained, including errors; internal thinking is not replayed. This is semantic continuity, not identical wire requests or guaranteed identical model behavior.
+A CLI import uses ordered, role-labelled content in one user message by default. Every supplied user/tool image and tool result is retained, including errors; internal thinking is not replayed. This is semantic continuity, not identical wire requests or guaranteed identical model behavior.
+
+`PI_CLAUDE_CLI_IMPORT=structured` imports the messages themselves instead, on a CLI known to take them (2.1.292+). Each user message before the last is written with `shouldQuery: false`, which adds it to the CLI's conversation without a model call, and the provider waits for the empty `result` that confirms it before writing the next line; each assistant turn is written as an `assistant` message naming the process's model; the last user message starts the turn. The wire then carries real `tool_use` and `tool_result` blocks in pi's order. The rules are pi-ai's own (`transformMessages`): failed and aborted assistant turns are left out, a tool call without a result gets one that says so, and a result without its call stays a text record. A history that does not start and end with a user message, or has two assistant turns in a row, is imported as text.
+
+Tool call ids are checked on the way out. The Anthropic API accepts `^[a-zA-Z0-9_-]{1,64}$`; an id from another provider that does not fit is replaced, in the import only, by `toolu_pi_` plus a hash of it, the same on the call and its result and the same in every import. pi's stored ids are never changed. Ids of calls the model makes on this provider are Claude's own, so pi's results name them as they are.
+
+If the CLI answers a held message with a model turn, or does not confirm it within twenty seconds, the import has failed: the process is retired (`cause=import`) and a fresh one gets the text import. Neither `shouldQuery` nor assistant messages on stdin are documented by Claude Code, which is why this is opt-in.
 
 ## Compaction and failure
 

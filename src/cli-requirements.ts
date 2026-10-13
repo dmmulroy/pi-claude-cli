@@ -23,12 +23,29 @@ export const parseCliVersion = (versionOutput: string): Option.Option<string> =>
     Option.flatMap((match) => Option.fromUndefinedOr(match[1])),
   );
 
-/** True when `version` is `MIN_SUPPORTED_CLI_VERSION` or newer. */
-export const isSupportedCliVersion = (version: string): boolean => {
+/**
+ * Oldest Claude Code version whose stdin was seen to take a structured
+ * history: held user messages (`shouldQuery: false`) and replayed assistant
+ * messages, in order. Read off the wire on 2.1.292; nothing older was tried,
+ * and a CLI that does not know `shouldQuery` would answer each replayed user
+ * message with a model call.
+ */
+export const MIN_STRUCTURED_IMPORT_CLI_VERSION = "2.1.292";
+
+/** True when `version` is `floor` or newer. */
+const isAtLeast = (version: string, floor: string): boolean => {
   const parts = version.split(".").map(Number);
-  const floor = MIN_SUPPORTED_CLI_VERSION.split(".").map(Number);
+  const floorParts = floor.split(".").map(Number);
   const difference = parts
-    .map((part, index) => part - (floor[index] ?? 0))
+    .map((part, index) => part - (floorParts[index] ?? 0))
     .find((delta) => delta !== 0);
   return difference === undefined || difference > 0;
 };
+
+/** True when `version` is `MIN_SUPPORTED_CLI_VERSION` or newer. */
+export const isSupportedCliVersion = (version: string): boolean =>
+  isAtLeast(version, MIN_SUPPORTED_CLI_VERSION);
+
+/** True when `version` takes a structured history on stdin. */
+export const supportsStructuredImport = (version: string): boolean =>
+  isAtLeast(version, MIN_STRUCTURED_IMPORT_CLI_VERSION);

@@ -407,6 +407,58 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     ],
   ),
   scenario(
+    "structured-import",
+    "PI_CLAUDE_CLI_IMPORT=structured gives a fresh process pi's history as messages, with valid tool call ids",
+    [
+      [
+        ...episode("mode=spawn", "import=structured", "importFrames=5"),
+        ...count(1),
+      ],
+      [
+        ...span("ClaudeProcess.importHistory", "frames=5", "acknowledged=true"),
+        ...count(1),
+      ],
+      [...span("ClaudeProcess.retire", "cause=import"), "--max-count", "0"],
+    ],
+    {
+      env: {
+        PI_CLAUDE_CLI_IMPORT: "structured",
+        PI_CLAUDE_CLI_KEEPALIVE_MS: "0",
+      },
+    },
+  ),
+  scenario(
+    "structured-import-refused",
+    "a CLI that answers a held message is retired and the history imported as text into a fresh process",
+    [
+      [
+        ...span("ClaudeProcess.importHistory", "acknowledged=false"),
+        ...count(1),
+      ],
+      [...span("ClaudeProcess.retire", "cause=import"), ...count(1)],
+      [
+        ...episode("import=flat", "importRefused=true", "outcome=done"),
+        ...count(1),
+      ],
+    ],
+    {
+      env: {
+        PI_CLAUDE_CLI_IMPORT: "structured",
+        PI_CLAUDE_CLI_KEEPALIVE_MS: "0",
+        CLAUDE_STUB_QUERY_HELD: "1",
+      },
+    },
+  ),
+  scenario(
+    "flat-import-default",
+    "without PI_CLAUDE_CLI_IMPORT a fresh process gets the history as one text message",
+    [
+      [...episode("mode=spawn", "import=flat"), ...count(2)],
+      [...span("ClaudeProcess.importHistory"), "--max-count", "0"],
+    ],
+    { env: { PI_CLAUDE_CLI_KEEPALIVE_MS: "0" } },
+  ),
+  scenario(
     "process-dies",
     "a process that dies mid-turn fails the episode with its stderr",
     [
@@ -765,6 +817,7 @@ const runScenario = Effect.fn("Scenarios.run")(function* (
       CLAUDE_STUB_ENV_FILE: path.join(work, "env.json"),
       CLAUDE_STUB_TOOLS_FILE: path.join(work, "tools.jsonl"),
       CLAUDE_STUB_CHILD_PID_FILE: path.join(work, "child.pid"),
+      CLAUDE_STUB_FRAMES_FILE: path.join(work, "frames.jsonl"),
       ...scenario.env,
     },
   );

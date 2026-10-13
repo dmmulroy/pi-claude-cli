@@ -29,7 +29,9 @@ Requires macOS or Linux, Node 22+, pi, and an authenticated `claude` binary on P
 
 A fresh CLI process is handed pi's whole history as one user message of role-labelled text plus image blocks. That import misses the prompt cache for the conversation. Ordinary follow-ups and tool calls keep the warm process and send only the new content.
 
-**Not byte-identical to a direct API provider:** Claude Code's print interface accepts user messages, not an arbitrary structured conversation. Historical tool calls are replayed as records (`TOOL CALL <name> id=…`), and thinking is not replayed.
+**Not byte-identical to a direct API provider:** by default a fresh process gets the history as one user message of role-labelled text. Historical tool calls are replayed as records (`TOOL CALL <name> id=…`), and thinking is not replayed.
+
+**Structured import (opt-in, `PI_CLAUDE_CLI_IMPORT=structured`):** Claude Code 2.1.292+ also takes a history as the messages themselves on stdin: user messages that are added without asking the model, and assistant messages replayed as they were. The provider then sends real `tool_use` and `tool_result` blocks in order, as pi's own Anthropic provider would. A tool call id Claude would reject (after a switch from another provider) is replaced on the wire by a stable valid one; pi's stored ids never change. It is off by default because it relies on stdin behaviour Claude Code does not document: it was read off the wire on 2.1.292 against an endpoint that rejects every request, and has not been run against the real API. On an older CLI, and whenever the CLI does not confirm a held message, the provider falls back to the text import.
 
 See [the context contract](docs/CONTEXT-POLICY.md) for the details.
 
@@ -49,6 +51,7 @@ No environment variables are required.
 | `PI_CLAUDE_CLI_THINKING_DISPLAY` | `summarized` | `omitted` returns no thinking summaries                                        |
 | `MCP_TOOL_TIMEOUT`               | `3600000`    | CLI-side MCP call timeout                                                      |
 | `PI_CLAUDE_CLI_MODELS`           | account      | `builtin` lists pi's whole Anthropic catalogue instead of the account's models |
+| `PI_CLAUDE_CLI_IMPORT`           | `flat`       | `structured` gives a fresh process the history as messages; see below          |
 
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are never forwarded to the CLI: any of them would move it off the subscription login. A value that does not parse falls back to its default.
 

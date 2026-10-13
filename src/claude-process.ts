@@ -35,6 +35,7 @@ import {
 } from "effect";
 import { ClaudeCli } from "./claude-cli.ts";
 import {
+  assistantReplayLine,
   type CliMessage,
   type CliUserContentBlock,
   controlRequestLine,
@@ -46,6 +47,7 @@ import {
   toolPermissionResponseLine,
   userMessageLine,
 } from "./cli-protocol.ts";
+import { supportsStructuredImport } from "./cli-requirements.ts";
 import type { HistoryCheckpoint, LaunchSignature } from "./episode-mode.ts";
 import { ProcessExited, ProcessGone } from "./errors.ts";
 import {
@@ -63,6 +65,7 @@ import {
   thinkingControls,
 } from "./thinking-config.ts";
 import { isHandoffClaudeTool, mapClaudeToolNameToPi } from "./tool-mapping.ts";
+import type { CliReplayFrame } from "./pi-context.ts";
 import { recordSpanEvent } from "./tracing.ts";
 import { type TokenUsage, ZERO_TOKEN_USAGE } from "./usage.ts";
 
@@ -78,6 +81,8 @@ export type RetireCause =
   | "thinking"
   /** The process did not list its tools again after a tool change. */
   | "tools"
+  /** It did not take a structured history import. */
+  | "import"
   /** The episode it was serving failed. */
   | "failure"
   /** It stopped writing to stdout; its process group is killed without a grace period. */
@@ -148,6 +153,21 @@ export interface IClaudeProcess {
   readonly writeUser: (
     content: ReadonlyArray<CliUserContentBlock>,
   ) => Effect.Effect<void, ProcessGone>;
+  /** True when the CLI is a version known to take a structured history. */
+  readonly takesStructuredImport: boolean;
+  /**
+   * Give a fresh process pi's history as the messages themselves and start
+   * the turn with the last one. Every user message before the last is held
+   * (the CLI adds it without asking the model) and awaited, so the order on
+   * the wire is the order given.
+   *
+   * @returns False when the CLI did not take the history as sent: it asked
+   *   the model about a held message, or did not confirm one in time. The
+   *   process is then in an unknown state and the caller retires it.
+   */
+  readonly importHistory: (
+    frames: ReadonlyArray<CliReplayFrame>,
+  ) => Effect.Effect<boolean, ProcessGone>;
   /** Ask the CLI to end the running turn, as Esc does. */
   readonly interruptTurn: Effect.Effect<void>;
   /**
@@ -194,6 +214,11 @@ const CONTROL_TIMEOUT = Duration.seconds(5);
  * notification, never.
  */
 const TOOLS_RELIST_TIMEOUT = Duration.seconds(3);
+/**
+ * How long the CLI may take to confirm one held message of a history import.
+ * The first one also waits for the CLI to start; the rest take milliseconds.
+ */
+const IMPORT_HOLD_TIMEOUT = Duration.seconds(20);
 /** How long stdout EOF waits for the exit code and the last of stderr. */
 const EXIT_REPORT_GRACE = Duration.millis(500);
 
@@ -261,6 +286,20 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   const retired = yield* Deferred.make<void>();
   const killWithoutGrace = yield* Ref.make(false);
   const lastOutputAt = yield* Ref.make(yield* Clock.currentTimeMillis);
+  /**
+   * The held message of a history import the CLI has not confirmed yet.
+   * Completed with true by the empty `result` that confirms it, and with
+   * false by anything that shows the CLI is answering it instead.
+   */
+  const heldMessage = yield* Ref.make(
+    Option.none<Deferred.Deferred<boolean>>(),
+  );
+  const settleHeldMessage = (taken: boolean) =>
+    Effect.gen(function* () {
+      const held = yield* Ref.getAndSet(heldMessage, Option.none());
+      if (Option.isSome(held)) yield* Deferred.succeed(held.value, taken);
+      return Option.isSome(held);
+    });
   const endedBy = yield* Ref.make<"exited" | "killed">("exited");
 
   const handle = yield* cli.spawn({
@@ -414,6 +453,9 @@ const startClaudeProcess = Effect.fnUntraced(function* (
       case "McpRequest":
         return yield* handleMcpRequest(message);
       case "StreamEvent": {
+        // The model is answering a message that was only to be held: this
+        // CLI does not take a history import.
+        if (yield* settleHeldMessage(false)) return;
         // Recorded here, not by the episode: the `tools/call` for a block
         // can reach this reader before the episode has read the block.
         const block = message.event.content_block;
@@ -433,6 +475,8 @@ const startClaudeProcess = Effect.fnUntraced(function* (
         return yield* Queue.offer(inbox, message);
       }
       case "Result":
+        // The confirmation of a held message is not a turn's result.
+        if (yield* settleHeldMessage(true)) return;
         // The turn is over before the episode sees the result, so an episode
         // that retires the process on it does not interrupt a finished turn.
         yield* endTurn;
@@ -469,6 +513,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     );
     yield* Ref.set(alive, false);
     yield* endTurn;
+    yield* settleHeldMessage(false);
     for (const waiter of HashMap.values(yield* Ref.get(controlWaiters)))
       yield* Deferred.succeed(waiter, false);
     yield* Effect.sync(() =>
@@ -619,6 +664,47 @@ const startClaudeProcess = Effect.fnUntraced(function* (
 
   const idleTimer = yield* FiberHandle.make<void>();
 
+  const gone = new ProcessGone({
+    message: "The Claude CLI process has already ended.",
+  });
+
+  /** Start a turn with a user message. */
+  const writeUser = (content: ReadonlyArray<CliUserContentBlock>) =>
+    Effect.gen(function* () {
+      if (!(yield* Ref.get(alive))) return yield* gone;
+      yield* Ref.set(turnEnded, yield* Deferred.make<void>());
+      yield* Ref.set(turnActive, true);
+      yield* write(userMessageLine(content));
+    });
+
+  const importHistory = Effect.fn("ClaudeProcess.importHistory")(function* (
+    frames: ReadonlyArray<CliReplayFrame>,
+  ) {
+    yield* Effect.annotateCurrentSpan({ pid, frames: frames.length });
+    const last = frames[frames.length - 1];
+    let taken = last?.kind === "user";
+    for (const frame of frames.slice(0, -1)) {
+      if (!taken) break;
+      if (!(yield* Ref.get(alive))) return yield* gone;
+      if (frame.kind === "assistant") {
+        // Appended as it is; the CLI answers nothing.
+        yield* write(assistantReplayLine(launch.modelId, frame.content));
+        continue;
+      }
+      const confirmed = yield* Deferred.make<boolean>();
+      yield* Ref.set(heldMessage, Option.some(confirmed));
+      yield* write(userMessageLine(frame.content, { hold: true }));
+      taken = yield* Deferred.await(confirmed).pipe(
+        Effect.timeoutOption(IMPORT_HOLD_TIMEOUT),
+        Effect.map(Option.getOrElse(() => false)),
+        Effect.ensuring(Ref.set(heldMessage, Option.none())),
+      );
+    }
+    yield* Effect.annotateCurrentSpan({ acknowledged: taken });
+    if (taken && last?.kind === "user") yield* writeUser(last.content);
+    return taken;
+  });
+
   const process: IClaudeProcess = {
     cliSessionId: launch.cliSessionId,
     pid,
@@ -633,16 +719,12 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     isAlive: Ref.get(alive),
     lastOutputAtMillis: Ref.get(lastOutputAt),
     isTurnActive: Ref.get(turnActive),
-    writeUser: (content) =>
-      Effect.gen(function* () {
-        if (!(yield* Ref.get(alive)))
-          return yield* new ProcessGone({
-            message: "The Claude CLI process has already ended.",
-          });
-        yield* Ref.set(turnEnded, yield* Deferred.make<void>());
-        yield* Ref.set(turnActive, true);
-        yield* write(userMessageLine(content));
-      }),
+    writeUser,
+    takesStructuredImport: Option.exists(
+      yield* cli.version,
+      supportsStructuredImport,
+    ),
+    importHistory,
     interruptTurn: Effect.gen(function* () {
       const requestId = `pcc-int-${yield* Ref.updateAndGet(controlSequence, (n) => n + 1)}`;
       yield* write(controlRequestLine(requestId, { subtype: "interrupt" }));

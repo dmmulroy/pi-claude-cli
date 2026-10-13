@@ -59,6 +59,7 @@ import {
   piContext,
   piSystemPrompt,
   replayPiMessages,
+  structuredReplay,
 } from "./pi-context.ts";
 import { ProviderConfig } from "./provider-config.ts";
 import { RuntimeDirectory } from "./runtime-directory.ts";
@@ -195,6 +196,34 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
 
   // ---- 1. Reuse the session's parked process, or launch a fresh one ---------
 
+  /** Launch a process for this call; the episode holds it from then on. */
+  const launchProcess = Effect.gen(function* () {
+    // A provider-minted id, never pi's: forks reuse pi session ids.
+    const cliSessionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+    const systemPromptFile = yield* directory.stageSystemPrompt(
+      cliSessionId,
+      piSystemPrompt(request.systemPrompt),
+    );
+    // Uninterruptible: a launched process must be known to the episode
+    // before an abort can end it.
+    return yield* pool
+      .launch({
+        cliSessionId,
+        modelId: model.id,
+        systemPromptFile,
+        cwd,
+        thinking,
+        signature,
+        allowHandoff,
+        tools,
+        traceRawWire: config.traceWireDetail === "raw",
+      })
+      .pipe(
+        Effect.tap((launched) => Ref.set(borrowed, Option.some(launched))),
+        Effect.uninterruptible,
+      );
+  });
+
   const acquireProcess = Effect.gen(function* () {
     // Taking and recording are one step: an abort between them would leave
     // a process that is neither parked nor known to this episode.
@@ -254,30 +283,30 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
       yield* Ref.set(borrowed, Option.none());
       yield* pool.retireInBackground(parked.value, retireCauseForSpawn(reason));
     }
-    // A provider-minted id, never pi's: forks reuse pi session ids.
-    const cliSessionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
-    const systemPromptFile = yield* directory.stageSystemPrompt(
-      cliSessionId,
-      piSystemPrompt(request.systemPrompt),
-    );
-    // Uninterruptible for the same reason: a launched process must be known
-    // to the episode before an abort can end it.
-    const process = yield* pool
-      .launch({
-        cliSessionId,
-        modelId: model.id,
-        systemPromptFile,
-        cwd,
-        thinking,
-        signature,
-        allowHandoff,
-        tools,
-        traceRawWire: config.traceWireDetail === "raw",
-      })
-      .pipe(
-        Effect.tap((launched) => Ref.set(borrowed, Option.some(launched))),
-        Effect.uninterruptible,
-      );
+    // The history as the messages themselves, when asked for and possible.
+    const frames =
+      config.historyImport === "structured"
+        ? Option.fromUndefinedOr(structuredReplay(messages))
+        : Option.none();
+    const first = yield* launchProcess;
+    if (Option.isNone(frames) || !first.takesStructuredImport) {
+      yield* Effect.annotateCurrentSpan({ import: "flat" });
+      yield* first.writeUser(replayPiMessages(messages));
+      return { process: first, mode: "spawn" as const };
+    }
+    if (yield* first.importHistory(frames.value)) {
+      yield* Effect.annotateCurrentSpan({
+        import: "structured",
+        importFrames: frames.value.length,
+      });
+      return { process: first, mode: "spawn" as const };
+    }
+    // The CLI did not take the history as sent, so what it holds now is
+    // unknown: a fresh process gets it as labelled text instead.
+    yield* Ref.set(borrowed, Option.none());
+    yield* pool.retireInBackground(first, "import");
+    const process = yield* launchProcess;
+    yield* Effect.annotateCurrentSpan({ import: "flat", importRefused: true });
     yield* process.writeUser(replayPiMessages(messages));
     return { process, mode: "spawn" as const };
   });

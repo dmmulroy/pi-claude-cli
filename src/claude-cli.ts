@@ -80,6 +80,8 @@ export interface IClaudeCli {
     CliRequirementError | CliSpawnError,
     Scope.Scope
   >;
+  /** The installed CLI's version, once a launch has established it. */
+  readonly version: Effect.Effect<Option.Option<string>>;
 }
 
 /** Provides the Claude Code CLI launcher. */
@@ -239,6 +241,7 @@ export const makeClaudeCli = Effect.gen(function* () {
   });
 
   return ClaudeCli.of({
+    version: Ref.get(knownVersion),
     spawn: Effect.fn("ClaudeCli.spawn")(function* (launch: ClaudeCliLaunch) {
       const version = yield* supportedVersion();
       if (config.restrictedMode)

@@ -34,6 +34,7 @@ import {
 import { Type } from "typebox";
 import type { EpisodeOptions } from "../../src/episode.ts";
 import { nodeFileSystemLayer } from "../../src/node-platform.ts";
+import { isClaudeToolUseId } from "../../src/tool-call-id.ts";
 import {
   providerLayer,
   type ProviderRuntime,
@@ -180,6 +181,7 @@ const scenarioSession = Effect.fn("ScenarioDriver.session")(function* (
     update: (change: (current: Conversation) => Conversation) =>
       Ref.update(conversation, change),
     retireParked: Effect.promise(() => runtime.retireParkedProcesses()),
+    messages: Effect.map(Ref.get(conversation), (current) => current.messages),
   };
 });
 
@@ -246,6 +248,77 @@ const expectProcessGone = (pid: number) =>
       message: `expected process ${pid}, started by the CLI, to die with it`,
     });
   });
+
+/** A tool call id as another provider mints it: too long and with `|`. */
+const FOREIGN_TOOL_CALL_ID = `call_${"x".repeat(70)}|fc_scenario`;
+
+/**
+ * A finished exchange another provider served: a tool call with an id Claude
+ * would reject, its result, and the answer.
+ */
+const foreignToolExchange = (session: ScenarioSession) =>
+  Effect.gen(function* () {
+    const foreign = {
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-scenario",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+    } as const;
+    yield* session.user("read the file");
+    yield* session.append({
+      ...foreign,
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: FOREIGN_TOOL_CALL_ID,
+          name: "read",
+          arguments: { path: "notes.txt" },
+        },
+      ],
+      stopReason: "toolUse",
+    });
+    yield* session.answerToolCalls("NOTES");
+    yield* session.append({
+      ...foreign,
+      role: "assistant",
+      content: [{ type: "text", text: "The file says NOTES." }],
+      stopReason: "stop",
+    });
+  });
+
+const StdinFrame = Schema.Struct({
+  type: Schema.String,
+  held: Schema.Boolean,
+  model: Schema.NullOr(Schema.String),
+  content: Schema.Array(
+    Schema.Struct({
+      type: Schema.String,
+      id: Schema.optional(Schema.String),
+      name: Schema.optional(Schema.String),
+      tool_use_id: Schema.optional(Schema.String),
+      signature: Schema.optional(Schema.String),
+      thinking: Schema.optional(Schema.String),
+      text: Schema.optional(Schema.String),
+    }),
+  ),
+});
+
+/** Every user and assistant message the CLI processes read from stdin. */
+const stdinFrames = Effect.gen(function* () {
+  const lines = (yield* readStubFile("frames.jsonl")).trim().split("\n");
+  return yield* Effect.forEach(lines, (line) =>
+    Schema.decodeUnknownEffect(Schema.fromJsonString(StdinFrame))(line),
+  );
+});
 
 const toolRoundTrip = (session: ScenarioSession) =>
   Effect.gen(function* () {
@@ -512,6 +585,61 @@ const scenarios: Record<
       );
       yield* expectError(answer, "aborted", "Request aborted");
       yield* expectProcessGone(yield* stubChildPid);
+    }),
+
+  "structured-import": (session) =>
+    Effect.gen(function* () {
+      yield* foreignToolExchange(session);
+      // Keepalive is off, so this call imports the whole history afresh.
+      yield* expectDone(yield* session.say("and now?"), "PORT-OK");
+      const frames = yield* stdinFrames;
+      const imported = frames.slice(-5);
+      yield* expect(
+        imported
+          .map((frame) => `${frame.type}${frame.held ? ":held" : ""}`)
+          .join(" ") === "user:held assistant user:held assistant user",
+        `expected the history as five ordered messages, got ${JSON.stringify(frames.map((frame) => [frame.type, frame.held]))}`,
+      );
+      const [, call, result] = imported;
+      const toolUse = call?.content.find((block) => block.type === "tool_use");
+      const toolResult = result?.content.find(
+        (block) => block.type === "tool_result",
+      );
+      yield* expect(
+        toolUse?.name === "mcp__custom-tools__read" &&
+          toolUse.id !== undefined &&
+          toolUse.id !== FOREIGN_TOOL_CALL_ID &&
+          isClaudeToolUseId(toolUse.id) &&
+          toolResult?.tool_use_id === toolUse.id,
+        `expected the foreign tool call id replaced by one valid id on both sides, got ${JSON.stringify([toolUse, toolResult])}`,
+      );
+      yield* expect(
+        call?.model === "claude-haiku-4-5",
+        `expected the replayed assistant message to name the process's model, got ${call?.model}`,
+      );
+      // pi's own messages keep the id pi stored.
+      yield* expect(
+        JSON.stringify(yield* session.messages).includes(FOREIGN_TOOL_CALL_ID),
+        "expected pi's history to keep its own tool call id",
+      );
+    }),
+
+  "structured-import-refused": (session) =>
+    Effect.gen(function* () {
+      yield* foreignToolExchange(session);
+      yield* expectDone(yield* session.say("and now?"), "PORT-OK");
+      yield* Effect.sleep("300 millis");
+    }),
+
+  "flat-import-default": (session) =>
+    Effect.gen(function* () {
+      yield* expectDone(yield* session.say("hello"), "PORT-OK");
+      yield* expectDone(yield* session.say("and now?"), "PORT-OK");
+      const frames = yield* stdinFrames;
+      yield* expect(
+        frames.every((frame) => frame.type === "user" && !frame.held),
+        `expected only plain user messages, got ${JSON.stringify(frames.map((frame) => [frame.type, frame.held]))}`,
+      );
     }),
 
   "process-dies": (session) =>

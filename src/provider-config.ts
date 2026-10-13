@@ -11,6 +11,16 @@ import { Config, Context, Duration, Effect, Layer, Option } from "effect";
 /** How much of the CLI's stdout is recorded on the `episode` span. */
 export type TraceWireDetail = "counts" | "events" | "raw";
 
+/**
+ * How pi's history reaches a fresh CLI process.
+ *
+ * - `flat`: one user message of role-labelled text, the default.
+ * - `structured`: the messages themselves, with real tool calls and results.
+ *   Used only on a CLI known to take them; see
+ *   `MIN_STRUCTURED_IMPORT_CLI_VERSION`.
+ */
+export type HistoryImport = "flat" | "structured";
+
 /** Defines the provider configuration read from the environment. */
 export interface IProviderConfig {
   /**
@@ -32,6 +42,8 @@ export interface IProviderConfig {
   /** True when inherited simple or safe mode would break the launch. */
   readonly restrictedMode: boolean;
   readonly traceWireDetail: TraceWireDetail;
+  /** How a fresh process is given pi's history (`PI_CLAUDE_CLI_IMPORT`). */
+  readonly historyImport: HistoryImport;
 }
 
 /** Provides the provider configuration. */
@@ -97,6 +109,14 @@ const traceWireDetail = envText("PI_CLAUDE_CLI_TRACE_WIRE").pipe(
   }),
 );
 
+const historyImport = envText("PI_CLAUDE_CLI_IMPORT").pipe(
+  Effect.map((text): HistoryImport =>
+    Option.exists(text, (value) => value.toLowerCase() === "structured")
+      ? "structured"
+      : "flat",
+  ),
+);
+
 /** Constructs the provider configuration from the environment. */
 export const makeProviderConfig = Effect.gen(function* () {
   const simple = yield* envFlag("CLAUDE_CODE_SIMPLE");
@@ -123,6 +143,7 @@ export const makeProviderConfig = Effect.gen(function* () {
     ),
     restrictedMode: simple || safe,
     traceWireDetail: yield* traceWireDetail,
+    historyImport: yield* historyImport,
   });
 });
 
