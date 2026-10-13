@@ -26,8 +26,8 @@
     "effect": "4.0.3"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.87.1",
-    "@earendil-works/pi-coding-agent": "0.87.1",
+    "@earendil-works/pi-ai": "1.2.0",
+    "@earendil-works/pi-coding-agent": "1.2.0",
     "@eslint/js": "^9.39.4",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^3.2.4",

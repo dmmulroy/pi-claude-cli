@@ -51,8 +51,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pi-version: ["0.84.2", "latest"]
-    continue-on-error: ${{ matrix.pi-version == 'latest' }}
+        # 0.84.2 is the oldest pi this provider is checked against, 1.2.0 the
+        # release the devDependencies pin, and `latest` is a required check:
+        # a pi release that breaks the provider fails CI.
+        pi-version: ["0.84.2", "1.2.0", "latest"]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
