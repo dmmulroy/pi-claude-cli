@@ -620,8 +620,16 @@ const scenarios: Record<
       );
       yield* expect(
         seen.includes('"mcpToolTimeout":"3600000"') &&
-          seen.includes('"disableAutoCompact":"1"'),
+          seen.includes('"disableAutoCompact":"1"') &&
+          seen.includes('"disableCompact":"1"'),
         `expected the child-only environment, got ${seen}`,
+      );
+      // pi owns retries, whatever the host's environment asks for.
+      yield* expect(
+        seen.includes('"maxRetries":"0"') &&
+          seen.includes('"retryWatchdog":null') &&
+          seen.includes('"disableNonessentialTraffic":"1"'),
+        `expected no CLI retries and no non-essential traffic, got ${seen}`,
       );
     }),
 };

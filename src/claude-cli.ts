@@ -143,22 +143,37 @@ const launchArguments = (
   INBAND_MCP_CONFIG_JSON,
 ];
 
-/** Child-only environment: what Claude Code must not do on its own. */
-const launchEnvironment = (
+/**
+ * Child-only environment: what Claude Code must not do on its own. The names
+ * are Claude Code's documented ones (code.claude.com/docs/en/env-vars) and
+ * were checked on the wire against claude 2.1.292.
+ */
+export const launchEnvironment = (
   mcpToolTimeoutMillis: string,
 ): Record<string, string | undefined> => ({
   CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1",
   CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
   ENABLE_CLAUDEAI_MCP_SERVERS: "false",
-  // pi owns compaction.
+  // pi owns compaction: no automatic compaction, and no `/compact` either.
   DISABLE_AUTO_COMPACT: "1",
   DISABLE_COMPACT: "1",
+  // pi owns retries: a failed API request is reported to pi at once, which
+  // retries with its own backoff. The CLI's default is 10 attempts of its
+  // own, during which pi sees a silent stream.
+  CLAUDE_CODE_MAX_RETRIES: "0",
+  // No auto-update, telemetry, error reporting, release notes or
+  // availability checks from a process pi is driving. This also turns off
+  // feature-flag fetching, so the CLI runs on its built-in flag defaults.
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
   ENABLE_TOOL_SEARCH: "false",
   MCP_TOOL_TIMEOUT: mcpToolTimeoutMillis,
   // `undefined` removes the variable from the inherited environment.
   ...Object.fromEntries(
     SUBSCRIPTION_OVERRIDE_ENV_VARS.map((name) => [name, undefined]),
   ),
+  // The unattended-session watchdog retries capacity errors indefinitely
+  // and overrides the retry count above.
+  CLAUDE_CODE_RETRY_WATCHDOG: undefined,
 });
 
 /** Constructs the CLI launcher over the contextual process spawner. */

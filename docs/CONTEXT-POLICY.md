@@ -19,7 +19,7 @@ Every launch uses:
 - `--strict-mcp-config --setting-sources "" --disable-slash-commands --no-chrome`
 - `--mcp-config` declaring the in-band `custom-tools` server, and optional host `--settings`
 
-Child-only environment disables independent CLAUDE.md/auto-memory discovery, claude.ai MCP connectors, tool search and CLI auto-compaction. Subscription OAuth/keychain access is retained. `--bare`, inherited simple mode and safe mode are not substitutes. Explicit host guards and managed policy still apply. Standalone Claude Code settings are never modified.
+Child-only environment disables independent CLAUDE.md/auto-memory discovery, claude.ai MCP connectors, tool search, all CLI compaction (`DISABLE_AUTO_COMPACT`, `DISABLE_COMPACT`), the CLI's own API retries (`CLAUDE_CODE_MAX_RETRIES=0`, and an inherited `CLAUDE_CODE_RETRY_WATCHDOG` is removed) and its non-essential traffic (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`: updates, telemetry, error reporting and feature-flag fetching). Subscription OAuth/keychain access is retained. `--bare`, inherited simple mode and safe mode are not substitutes. Explicit host guards and managed policy still apply. Standalone Claude Code settings are never modified.
 
 ## Conversation synchronization
 
@@ -33,7 +33,7 @@ A CLI import uses ordered, role-labelled content because print mode does not acc
 
 ## Compaction and failure
 
-pi owns compaction and retry. Hosts must stop forcing `set_auto_compaction: false` for this provider. A compacted pi history invalidates the disposable Claude process before the next request. Errors and aborts return structured assistant errors, not raw strings or success messages; the existing overflow normalizer enables pi's recovery path.
+pi owns compaction and retry: the CLI is launched with its own retries at zero, so a failed API request reaches pi as an assistant error at once and pi's backoff decides what happens next. Hosts must stop forcing `set_auto_compaction: false` for this provider. A compacted pi history invalidates the disposable Claude process before the next request. Errors and aborts return structured assistant errors, not raw strings or success messages; the existing overflow normalizer enables pi's recovery path.
 
 A stopped/failed process is not reused: a failed, timed-out or aborted episode retires its process in the background, after pi has its error. Runs write no Claude conversation file or resume sidecar. Prompt staging files are removed after the episode that launched the process and the private runtime directory when the session shuts down. SIGKILL cannot run cleanup and may leave its private directory.
 

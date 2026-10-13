@@ -62,6 +62,11 @@ if (process.env.CLAUDE_STUB_ENV_FILE) {
       ),
       mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null,
       disableAutoCompact: process.env.DISABLE_AUTO_COMPACT ?? null,
+      disableCompact: process.env.DISABLE_COMPACT ?? null,
+      maxRetries: process.env.CLAUDE_CODE_MAX_RETRIES ?? null,
+      retryWatchdog: process.env.CLAUDE_CODE_RETRY_WATCHDOG ?? null,
+      disableNonessentialTraffic:
+        process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ?? null,
       disableClaudeMds: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS ?? null,
       secureStorageDir: process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? null,
     }),

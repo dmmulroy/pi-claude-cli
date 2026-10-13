@@ -463,13 +463,15 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
   ),
   scenario(
     "env-stripping",
-    "the CLI never sees the variables that would move it off the subscription",
+    "the CLI never sees the variables that would move it off the subscription, and never retries or compacts on its own",
     [[...episode("outcome=done"), ...count(1)]],
     {
       env: {
         ANTHROPIC_API_KEY: "sk-scenario-must-not-leak",
         ANTHROPIC_AUTH_TOKEN: "scenario-must-not-leak",
         ANTHROPIC_BASE_URL: "http://127.0.0.1:9",
+        CLAUDE_CODE_MAX_RETRIES: "10",
+        CLAUDE_CODE_RETRY_WATCHDOG: "1",
       },
     },
   ),

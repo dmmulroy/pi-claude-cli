@@ -29,6 +29,21 @@ describe("overflow error normalization (issue #4)", () => {
       ).toBe(false);
     });
 
+    it("classifies the CLI's own wording, which now reaches pi on the first failure", () => {
+      // With CLAUDE_CODE_MAX_RETRIES=0 the CLI reports each failed request
+      // at once. Capacity errors must stay with pi's retry, not compaction.
+      expect(
+        isOverflowError(
+          "API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.",
+        ),
+      ).toBe(false);
+      expect(
+        isOverflowError(
+          'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 214315 tokens > 200000 maximum"}}',
+        ),
+      ).toBe(true);
+    });
+
     it("is idempotent: already-rewritten messages do not match again", () => {
       expect(
         isOverflowError("context_length_exceeded: prompt is too long"),
