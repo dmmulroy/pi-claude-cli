@@ -63,6 +63,15 @@ jobs:
           node-version: "22"
       - run: npm ci
       - run: npm install -g "@earendil-works/pi-coding-agent@${{ matrix.pi-version }}"
-      - run: npm run test:e2e
+      # Run directly, not through `npm run`: npm puts node_modules/.bin first
+      # on PATH, where the devDependency's `pi` would shadow the version this
+      # matrix entry installed.
+      - name: Check the pi under test
+        run: |
+          echo "pi $(pi --version)"
+          if [ "${{ matrix.pi-version }}" != "latest" ]; then
+            test "$(pi --version)" = "${{ matrix.pi-version }}"
+          fi
+      - run: bash scripts/e2e-stub.sh
       # The gate for the Effect services: every stub scenario's trace assertions.
-      - run: npm run test:scenarios
+      - run: node scripts/scenarios.ts
