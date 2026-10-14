@@ -261,16 +261,14 @@ export const makeClaudeCli = Effect.gen(function* () {
             extendEnv: true,
             env: launchEnvironment(config.mcpToolTimeoutMillis),
             stdin: launch.stdin,
-            // The CLI leads its own process group, so closing the process
-            // scope signals the group (`kill(-pid)`) and takes whatever the
-            // CLI started with it. A terminal's Ctrl-C therefore no longer
-            // reaches the CLI directly: pi's shutdown disposes the runtime,
-            // the pool's exit handler covers an exit without disposal, and
-            // a CLI whose stdin closes exits by itself.
-            detached: true,
+            // Same process group as pi, so Ctrl-C in `pi -p` reaches the CLI.
+            // A CLI in a group of its own survives that Ctrl-C with its model
+            // request still running (seen on claude 2.1.292): closing stdin
+            // does not stop a turn in progress. The CLI starts no processes
+            // of its own (no native tools), so a group kill would gain nothing.
+            detached: false,
             // The process scope's own finalizer asks the CLI to exit first;
-            // whatever is still running in the group after that is killed
-            // outright.
+            // whatever is still running after that is killed outright.
             killSignal: "SIGKILL",
           }),
         )

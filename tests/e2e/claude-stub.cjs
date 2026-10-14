@@ -21,9 +21,6 @@
  *   think           streams a signed thinking block ("STUB-THOUGHT",
  *                   signature "STUB-SIGNATURE"), then "PORT-OK"
  *   hang            starts a message and never finishes it
- *   orphan          like hang, after starting a child process of its own
- *                   that ignores SIGTERM and outlives a plain kill of the
- *                   stub; its pid goes to CLAUDE_STUB_CHILD_PID_FILE
  *   chatter         stays silent on the model stream for 600 ms while
  *                   pinging the in-band MCP server every 100 ms, then
  *                   answers "PORT-OK"
@@ -35,7 +32,7 @@
  *   CLAUDE_STUB_ENV_FILE    write what this process sees of the environment
  *                           the provider controls
  *   CLAUDE_STUB_TOOLS_FILE  append the tool names the MCP server listed
- *   CLAUDE_STUB_CHILD_PID_FILE  where `orphan` writes its child's pid
+ *   CLAUDE_STUB_PID_FILE    write this process's pid once a turn starts
  *   CLAUDE_STUB_MODELS      JSON for `models` in the `initialize` response
  *   CLAUDE_STUB_FRAMES_FILE append each user and assistant message read from
  *                           stdin, with whether it was held
@@ -286,6 +283,8 @@ const toolTurn = async (piToolNames) => {
 
 const startTurn = (text) => {
   turnActive = true;
+  if (process.env.CLAUDE_STUB_PID_FILE)
+    fs.writeFileSync(process.env.CLAUDE_STUB_PID_FILE, String(process.pid));
   emit({ type: "system", subtype: "init", session_id: "stub-session" });
   const tool = /tools?:([A-Za-z0-9_,-]+)/.exec(text);
   if (tool) {
@@ -329,21 +328,7 @@ const startTurn = (text) => {
     setTimeout(ping, 100);
     return;
   }
-  if (text.includes("orphan")) {
-    // A process of the CLI's own, in the CLI's process group. It has no pipe
-    // to notice the stub's death by, so only a group kill ends it.
-    const child = require("node:child_process").spawn(
-      process.execPath,
-      ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
-      { stdio: "ignore" },
-    );
-    if (process.env.CLAUDE_STUB_CHILD_PID_FILE)
-      fs.writeFileSync(
-        process.env.CLAUDE_STUB_CHILD_PID_FILE,
-        String(child.pid),
-      );
-  }
-  if (text.includes("hang") || text.includes("orphan")) {
+  if (text.includes("hang")) {
     messageStart();
     streamEvent({
       type: "content_block_start",
@@ -516,4 +501,10 @@ process.stdin.on("data", (chunk) => {
   }
 });
 // Like the real CLI in print mode: closing stdin ends the process.
-process.stdin.on("end", () => process.exit(0));
+// Like the real CLI, a closed stdin does not stop a turn in progress: the
+// process exits once it is idle.
+process.stdin.on("end", () => {
+  const exitWhenIdle = () =>
+    turnActive ? setTimeout(exitWhenIdle, 50) : process.exit(0);
+  exitWhenIdle();
+});

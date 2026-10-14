@@ -85,7 +85,7 @@ export type RetireCause =
   | "import"
   /** The episode it was serving failed. */
   | "failure"
-  /** It stopped writing to stdout; its process group is killed without a grace period. */
+  /** It stopped writing to stdout; killed without a grace period. */
   | "timeout"
   /** pi aborted the episode it was serving. */
   | "abort"

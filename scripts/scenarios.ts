@@ -388,25 +388,6 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     { env: { PI_CLAUDE_CLI_TIMEOUT_MS: "350" } },
   ),
   scenario(
-    "process-group-killed",
-    "retiring a stalled CLI kills the processes it started with it",
-    [
-      [
-        ...span("ClaudeProcess.retire", "cause=timeout", "ended=killed"),
-        ...count(1),
-      ],
-    ],
-    { env: { PI_CLAUDE_CLI_TIMEOUT_MS: "350" } },
-  ),
-  scenario(
-    "abort-kills-process-group",
-    "an aborted call ends the CLI's whole process group",
-    [
-      [...episode("outcome=aborted"), ...count(1)],
-      [...span("ClaudeProcess.retire", "cause=abort"), ...count(1)],
-    ],
-  ),
-  scenario(
     "structured-import",
     "PI_CLAUDE_CLI_IMPORT=structured gives a fresh process pi's history as messages, with valid tool call ids",
     [
@@ -851,7 +832,6 @@ const runScenario = Effect.fn("Scenarios.run")(function* (
       CLAUDE_STUB_ARGV_FILE: path.join(work, "argv.jsonl"),
       CLAUDE_STUB_ENV_FILE: path.join(work, "env.json"),
       CLAUDE_STUB_TOOLS_FILE: path.join(work, "tools.jsonl"),
-      CLAUDE_STUB_CHILD_PID_FILE: path.join(work, "child.pid"),
       CLAUDE_STUB_FRAMES_FILE: path.join(work, "frames.jsonl"),
       ...scenario.env,
     },
