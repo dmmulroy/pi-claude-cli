@@ -14,10 +14,10 @@ export type TraceWireDetail = "counts" | "events" | "raw";
 /**
  * How pi's history reaches a fresh CLI process.
  *
- * - `flat`: one user message of role-labelled text, the default.
- * - `structured`: the messages themselves, with real tool calls and results.
- *   Used only on a CLI known to take them; see
- *   `MIN_STRUCTURED_IMPORT_CLI_VERSION`.
+ * - `structured`: the messages themselves, with real tool calls, results and
+ *   signed thinking; the default. Used only on a CLI known to take them (see
+ *   `MIN_STRUCTURED_IMPORT_CLI_VERSION`); any other gets `flat`.
+ * - `flat`: one user message of role-labelled text (`PI_CLAUDE_CLI_IMPORT=flat`).
  */
 export type HistoryImport = "flat" | "structured";
 
@@ -111,9 +111,9 @@ const traceWireDetail = envText("PI_CLAUDE_CLI_TRACE_WIRE").pipe(
 
 const historyImport = envText("PI_CLAUDE_CLI_IMPORT").pipe(
   Effect.map((text): HistoryImport =>
-    Option.exists(text, (value) => value.toLowerCase() === "structured")
-      ? "structured"
-      : "flat",
+    Option.exists(text, (value) => value.toLowerCase() === "flat")
+      ? "flat"
+      : "structured",
   ),
 );
 

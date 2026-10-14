@@ -628,7 +628,7 @@ const scenarios: Record<
       yield* Effect.sleep("300 millis");
     }),
 
-  "flat-import-default": (session) =>
+  "flat-import": (session) =>
     Effect.gen(function* () {
       yield* expectDone(yield* session.say("hello"), "PORT-OK");
       yield* expectDone(yield* session.say("and now?"), "PORT-OK");

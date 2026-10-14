@@ -27,11 +27,13 @@ Requires macOS or Linux, Node 22+, pi, and an authenticated `claude` binary on P
 
 ## Cost of a fresh process
 
-A fresh CLI process is handed pi's whole history as one user message of role-labelled text plus image blocks. That import misses the prompt cache for the conversation. Ordinary follow-ups and tool calls keep the warm process and send only the new content.
+Ordinary follow-ups and tool calls keep the warm process and send only the new content. A fresh process (after the idle timeout, a model switch, a history edit, compaction or a pi restart) is handed pi's whole history.
 
-**Not byte-identical to a direct API provider:** by default a fresh process gets the history as one user message of role-labelled text. Historical tool calls are replayed as records (`TOOL CALL <name> id=…`), and thinking is not replayed.
+**Structured import (the default):** the history goes in as the messages themselves: user messages that are added without asking the model, and assistant messages replayed as they were, with real `tool_use` and `tool_result` blocks in order, as pi's own Anthropic provider would send them. A tool call id Claude would reject (after a switch from another provider) is replaced on the wire by a stable valid one; pi's stored ids never change. Signed thinking goes back too: the provider stores Claude's raw thinking blocks on pi's assistant message (under `piClaudeCli`), and replays them with their signatures while the message is this provider's, the model is the one that signed them and the message's text and tool calls are unchanged. Thinking of an edited message, another model or another provider is replayed as plain text, never signed.
 
-**Structured import (opt-in, `PI_CLAUDE_CLI_IMPORT=structured`):** Claude Code 2.1.292+ also takes a history as the messages themselves on stdin: user messages that are added without asking the model, and assistant messages replayed as they were. The provider then sends real `tool_use` and `tool_result` blocks in order, as pi's own Anthropic provider would. A tool call id Claude would reject (after a switch from another provider) is replaced on the wire by a stable valid one; pi's stored ids never change. Signed thinking goes back too: the provider stores Claude's raw thinking blocks on pi's assistant message (under `piClaudeCli`), and replays them with their signatures while the message is this provider's, the model is the one that signed them and the message's text and tool calls are unchanged. Thinking of an edited message, another model or another provider is replayed as plain text, never signed. It is off by default because it relies on stdin behaviour Claude Code does not document: it was read off the wire on 2.1.292 against an endpoint that rejects every request, and has not been run against the real API. `node scripts/scenarios.ts --live live-structured-import` does that (it spends subscription tokens). On an older CLI, and whenever the CLI does not confirm a held message, the provider falls back to the text import.
+It relies on stdin behaviour Claude Code does not document. It was checked against the real API on 2.1.299 (`PI_OWNED_LIVE=1 npx vitest run tests/live-structured-import.test.ts tests/live-pi-roundtrip.test.ts`): signed thinking is accepted back and a history with another provider's turns and a compaction imports cleanly. On a CLI older than 2.1.292, and whenever the CLI does not confirm a held message, the provider falls back to the text import. `PI_CLAUDE_CLI_IMPORT=flat` always uses it: one user message of role-labelled text, with tool calls as records (`TOOL CALL <name> id=…`) and no thinking.
+
+**No prompt cache across processes:** a fresh process pays for the whole history again, whichever import is used. Claude Code adds its startup reminders (environment, date) to the first user message it sends the model, which in a fresh process is the latest one rather than the first, so the request differs from the warm one from its first message on. This was measured, not assumed; the live test above reports the cache use.
 
 See [the context contract](docs/CONTEXT-POLICY.md) for the details.
 
@@ -51,7 +53,7 @@ No environment variables are required.
 | `PI_CLAUDE_CLI_THINKING_DISPLAY` | `summarized` | `omitted` returns no thinking summaries                                        |
 | `MCP_TOOL_TIMEOUT`               | `3600000`    | CLI-side MCP call timeout                                                      |
 | `PI_CLAUDE_CLI_MODELS`           | account      | `builtin` lists pi's whole Anthropic catalogue instead of the account's models |
-| `PI_CLAUDE_CLI_IMPORT`           | `flat`       | `structured` gives a fresh process the history as messages; see below          |
+| `PI_CLAUDE_CLI_IMPORT`           | `structured` | `flat` gives a fresh process the history as one text message; see above        |
 
 `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are never forwarded to the CLI: any of them would move it off the subscription login. A value that does not parse falls back to its default.
 
@@ -110,7 +112,7 @@ The opt-in real-CLI checks spend subscription tokens in a disposable workspace:
 
 ```bash
 node scripts/scenarios.ts --live
-PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts
+PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts tests/live-structured-import.test.ts
 ```
 
 ## License

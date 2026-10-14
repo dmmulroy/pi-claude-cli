@@ -389,7 +389,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
   ),
   scenario(
     "structured-import",
-    "PI_CLAUDE_CLI_IMPORT=structured gives a fresh process pi's history as messages, with valid tool call ids",
+    "a fresh process gets pi's history as messages, with valid tool call ids",
     [
       [
         ...episode("mode=spawn", "import=structured", "importFrames=5"),
@@ -448,13 +448,13 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     },
   ),
   scenario(
-    "flat-import-default",
-    "without PI_CLAUDE_CLI_IMPORT a fresh process gets the history as one text message",
+    "flat-import",
+    "PI_CLAUDE_CLI_IMPORT=flat gives a fresh process the history as one text message",
     [
       [...episode("mode=spawn", "import=flat"), ...count(2)],
       [...span("ClaudeProcess.importHistory"), "--max-count", "0"],
     ],
-    { env: { PI_CLAUDE_CLI_KEEPALIVE_MS: "0" } },
+    { env: { PI_CLAUDE_CLI_IMPORT: "flat", PI_CLAUDE_CLI_KEEPALIVE_MS: "0" } },
   ),
   scenario(
     "process-dies",

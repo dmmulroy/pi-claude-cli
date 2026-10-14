@@ -507,7 +507,17 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
           mcpToolResultFromPi(message),
         );
     } else if (mode === "turn") {
-      yield* process.writeUser(replayPiMessages(delta));
+      // A structured process gets the new user message as a fresh import
+      // would give it, so a later import of the same history sends the
+      // model the same request; a text-imported one gets role labels.
+      const structuredTurn =
+        config.historyImport === "structured" && process.takesStructuredImport
+          ? structuredReplay(delta, model.id)
+          : undefined;
+      const last = structuredTurn?.[structuredTurn.length - 1];
+      yield* process.writeUser(
+        last?.kind === "user" ? last.content : replayPiMessages(delta),
+      );
     }
 
     const { end, turnReportedBefore } = yield* readTurn(process);

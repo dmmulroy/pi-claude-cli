@@ -17,7 +17,7 @@ npm run test:coverage     # unit tests of the pure modules
 npm run test:scenarios    # the gate for the Effect services: stub scenarios + trace assertions
 npm run test:e2e          # real pi, stub CLI
 node scripts/scenarios.ts --live   # spends subscription tokens
-PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts   # spends more
+PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts tests/live-structured-import.test.ts   # spends more
 ```
 
 Coverage floors: 92% lines/functions/statements, 85% branches, over the pure modules listed in `vitest.config.ts`. The services have no unit tests; `test:scenarios` is their gate.
@@ -49,7 +49,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - `src/mcp-inband.ts`: the in-band (`"type": "sdk"`) MCP server that advertises pi's tools on the CLI's own control channel. No socket, no helper process, no secret. A `tools/call` is held open until pi's next call delivers the result, matched on the actual tool-use id and name. A changed tool list is announced with `notifications/tools/list_changed` and confirmed by the CLI's next `tools/list`.
 - `src/cli-protocol.ts`: lenient `Schema` decoding of the CLI's NDJSON; builders for stdin lines.
 - `src/event-bridge.ts`: convert CLI stream events to pi messages. Content indexes restart each model cycle, so blocks are tracked by `(cycle, index)`.
-- `src/pi-context.ts`: normalize old/new pi context formats, import ordered messages and images (as labelled text, or as structured frames with `PI_CLAUDE_CLI_IMPORT=structured`), hash acknowledged history.
+- `src/pi-context.ts`: normalize old/new pi context formats, import ordered messages and images (as structured frames by default, or as labelled text with `PI_CLAUDE_CLI_IMPORT=flat`), hash acknowledged history.
 - `src/signed-thinking.ts`: Claude's raw signed thinking blocks, stored on pi's assistant message under `piClaudeCli` by the event bridge and replayed by a structured import only while the message is unchanged. Pure; imported eagerly through `event-bridge`.
 - `src/tool-call-id.ts`: tool call ids Claude would reject, mapped to valid ones in what is sent and back. pi's stored ids never change.
 - `src/thinking-config.ts`: pi thinking levels as CLI flags and live control requests.
