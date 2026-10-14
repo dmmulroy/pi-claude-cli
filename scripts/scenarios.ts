@@ -127,7 +127,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
         ...count(1),
       ],
       [...span("ClaudeCli.spawn"), "--under", "episode", ...count(1)],
-      [...span("ClaudeProcessPool.park", "idleMs=600000"), ...count(1)],
+      [...span("ClaudeProcessPool.park", "idleMs=3600000"), ...count(1)],
       [...span("ProviderRuntime.build", "toolBridge=inband"), ...count(1)],
       [...span("ClaudeProcess"), "--status", "ok", ...count(1)],
     ],
@@ -640,7 +640,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "real pi in print mode loads the provider lazily and exits with a process parked",
     [
       [...episode("mode=spawn", "outcome=done"), ...count(1)],
-      [...span("ClaudeProcessPool.park", "idleMs=600000"), ...count(1)],
+      [...span("ClaudeProcessPool.park", "idleMs=3600000"), ...count(1)],
       [...span("ProviderRuntime.dispose"), ...count(1)],
       [
         ...span("ClaudeProcess.retire", "cause=shutdown", "ended=exited"),

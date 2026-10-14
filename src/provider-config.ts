@@ -53,7 +53,12 @@ export class ProviderConfig extends Context.Service<
 >()("pi-claude-cli/ProviderConfig") {}
 
 const DEFAULT_INACTIVITY_TIMEOUT_MILLIS = 300_000;
-const DEFAULT_KEEPALIVE_MILLIS = 600_000;
+/**
+ * One hour: Claude Code writes its prompt cache with a one-hour lifetime, and
+ * a fresh process cannot read the warm one's cache. A process parked for less
+ * throws away a cache that would still have been hit.
+ */
+const DEFAULT_KEEPALIVE_MILLIS = 3_600_000;
 const DEFAULT_HANDOFF_WAIT_MILLIS = 1_800_000;
 /** One hour: tool calls block in the CLI's MCP client while pi runs the tool. */
 const DEFAULT_MCP_TOOL_TIMEOUT_MILLIS = "3600000";

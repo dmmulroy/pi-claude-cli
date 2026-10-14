@@ -33,7 +33,7 @@ Ordinary follow-ups and tool calls keep the warm process and send only the new c
 
 It relies on stdin behaviour Claude Code does not document. It was checked against the real API on 2.1.299 (`PI_OWNED_LIVE=1 npx vitest run tests/live-structured-import.test.ts tests/live-pi-roundtrip.test.ts`): signed thinking is accepted back and a history with another provider's turns and a compaction imports cleanly. On a CLI older than 2.1.292, and whenever the CLI does not confirm a held message, the provider falls back to the text import. `PI_CLAUDE_CLI_IMPORT=flat` always uses it: one user message of role-labelled text, with tool calls as records (`TOOL CALL <name> id=…`) and no thinking.
 
-**No prompt cache across processes:** a fresh process pays for the whole history again, whichever import is used. Claude Code adds its startup reminders (environment, date) to the first user message it sends the model, which in a fresh process is the latest one rather than the first, so the request differs from the warm one from its first message on. This was measured, not assumed; the live test above reports the cache use.
+**No prompt cache across processes:** a fresh process pays for the whole history again, whichever import is used. Claude Code adds its startup reminders (environment, date) to the first user message it sends the model, which in a fresh process is the latest one rather than the first, so the request differs from the warm one from its first message on. This was measured, not assumed; the live test above reports the cache use. That is why a parked process waits an hour by default, as long as Claude Code's prompt cache lasts: each parked process holds roughly 500 MB while it waits.
 
 See [the context contract](docs/CONTEXT-POLICY.md) for the details.
 
@@ -43,7 +43,7 @@ No environment variables are required.
 
 | Variable                         | Default      | Purpose                                                                        |
 | -------------------------------- | ------------ | ------------------------------------------------------------------------------ |
-| `PI_CLAUDE_CLI_KEEPALIVE_MS`     | `600000`     | Idle lifetime of a parked process; `0` parks nothing                           |
+| `PI_CLAUDE_CLI_KEEPALIVE_MS`     | `3600000`    | Idle lifetime of a parked process; `0` parks nothing                           |
 | `PI_CLAUDE_CLI_SETTINGS`         | unset        | Explicit Claude Code settings file (hooks, permissions) passed as `--settings` |
 | `PI_CLAUDE_CLI_TIMEOUT_MS`       | `300000`     | Longest stdout silence while a call is attached; then an error and a kill      |
 | `PI_CLAUDE_CLI_HANDOFF_WAIT_MS`  | `1800000`    | Maximum wait for pi to answer a tool call                                      |
