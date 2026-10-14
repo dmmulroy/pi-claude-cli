@@ -100,9 +100,9 @@ export interface EpisodeEnd {
 /** How the CLI's turn left the episode. */
 type TurnEnd =
   /** A tool call: the CLI is blocked on it and pi runs the tool. */
-  | { readonly _tag: "HandedOff" }
+  | { readonly _tag: "HandedOff"; }
   /** The `result` envelope arrived. */
-  | { readonly _tag: "TurnEnded"; readonly interrupted: boolean };
+  | { readonly _tag: "TurnEnded"; readonly interrupted: boolean; };
 
 const retireCauseForSpawn = (reason: SpawnReason): RetireCause => {
   if (reason === "thinking" || reason === "tools") return reason;
@@ -229,9 +229,9 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     // a process that is neither parked nor known to this episode.
     const parked = Option.isSome(piSessionId)
       ? yield* pool.take(piSessionId.value).pipe(
-          Effect.tap((taken) => Ref.set(borrowed, taken)),
-          Effect.uninterruptible,
-        )
+        Effect.tap((taken) => Ref.set(borrowed, taken)),
+        Effect.uninterruptible,
+      )
       : Option.none<IClaudeProcess>();
 
     let decision: EpisodeMode = { mode: "spawn", reason: "noSession" };
@@ -239,15 +239,15 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
       const facts = Option.isNone(parked)
         ? Option.none()
         : Option.some({
-            signature: parked.value.signature,
-            acknowledged: yield* Ref.get(parked.value.acknowledged),
-            turnActive: yield* parked.value.isTurnActive,
-            awaitsToolResults: yield* parked.value.awaitsToolCalls(
-              deltaMessages(messages)
-                .filter(isToolResult)
-                .map((message) => message.toolCallId),
-            ),
-          });
+          signature: parked.value.signature,
+          acknowledged: yield* Ref.get(parked.value.acknowledged),
+          turnActive: yield* parked.value.isTurnActive,
+          awaitsToolResults: yield* parked.value.awaitsToolCalls(
+            deltaMessages(messages)
+              .filter(isToolResult)
+              .map((message) => message.toolCallId),
+          ),
+        });
       decision = decideEpisodeMode(facts, {
         signature,
         messages,
@@ -368,11 +368,9 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
         const label = cliMessageLabel(message);
         wireCounts.set(label, (wireCounts.get(label) ?? 0) + 1);
         if (config.traceWireDetail !== "counts" && Option.isSome(episodeSpan))
-          yield* recordSpanEvent(episodeSpan.value, `wire ${label}`, {
-            ...(message._tag === "StreamEvent"
-              ? { event: message.event.type }
-              : {}),
-          });
+          yield* recordSpanEvent(episodeSpan.value, `wire ${label}`, (message._tag === "StreamEvent"
+            ? { event: message.event.type }
+            : {}));
 
         if (message._tag === "StreamEvent") {
           const event = message.event;
@@ -420,12 +418,12 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
         const processTotals = tokenUsageFromModelUsage(result.modelUsage);
         const turnTotals = Option.isSome(processTotals)
           ? subtractTokenUsage(
+            processTotals.value,
+            yield* Ref.getAndSet(
+              process.lastProcessTotals,
               processTotals.value,
-              yield* Ref.getAndSet(
-                process.lastProcessTotals,
-                processTotals.value,
-              ),
-            )
+            ),
+          )
           : tokenUsageFromClaudeUsage(result.usage);
         // Net of what earlier episodes of this turn already handed to pi.
         const billed = maxTokenUsage(
