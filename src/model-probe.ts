@@ -24,6 +24,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { CliAccountModel } from "./account-models.ts";
 import { SUBSCRIPTION_OVERRIDE_ENV_VARS } from "./claude-cli.ts";
+import { parseCliVersion } from "./cli-requirements.ts";
 import { nodeChildProcessSpawnerLayer } from "./node-platform.ts";
 import { tracingLayer } from "./tracing.ts";
 
@@ -163,7 +164,51 @@ export const requestAccountModels = Effect.fn(
   return models;
 });
 
+/** How long `claude --version` may take. */
+const VERSION_TIMEOUT = Duration.seconds(5);
+
+/**
+ * The installed CLI's version.
+ *
+ * @returns None when the CLI is missing, does not answer in time or prints
+ *   no version. Never fails.
+ */
+export const requestCliVersion = Effect.fn("ModelProbe.requestCliVersion", {
+  root: true,
+})(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const version = yield* spawner
+    .string(
+      ChildProcess.make("claude", ["--version"], {
+        stdin: "ignore",
+        detached: false,
+        killSignal: "SIGKILL",
+      }),
+    )
+    .pipe(
+      Effect.timeoutOption(VERSION_TIMEOUT),
+      Effect.map(Option.flatMap(parseCliVersion)),
+      Effect.orElseSucceed(() => Option.none<string>()),
+    );
+  yield* Effect.annotateCurrentSpan({
+    version: Option.getOrElse(version, () => "none"),
+  });
+  return version;
+});
+
 const probeLayer = Layer.merge(nodeChildProcessSpawnerLayer, tracingLayer);
+
+/** The installed CLI's version, for `index.ts`; undefined when there is none. */
+export const probeCliVersion = (
+  signal: AbortSignal,
+): Promise<string | undefined> =>
+  Effect.runPromise(
+    requestCliVersion().pipe(
+      Effect.map(Option.getOrUndefined),
+      Effect.provide(probeLayer),
+    ),
+    { signal },
+  );
 
 /**
  * The boundary with `index.ts`: no Effect types. Aborting `signal` ends the

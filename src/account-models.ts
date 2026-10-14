@@ -250,35 +250,58 @@ export type ModelRefreshContext = Pick<
   "allowNetwork" | "force" | "signal" | "stored" | "publish"
 >;
 
+/** What a refresh asks the installed CLI. */
+export interface AccountModelsProbe {
+  /** The CLI's version, or undefined when there is no usable CLI. */
+  readonly version: (signal: AbortSignal) => Promise<string | undefined>;
+  /** The models the account offers, as the CLI reports them. */
+  readonly models: (
+    signal: AbortSignal,
+  ) => Promise<ReadonlyArray<CliAccountModel>>;
+}
+
+/**
+ * What the stored list records about the CLI that produced it, in the store's
+ * `etag` field. The CLI's list depends on its version (Haiku 5.5 is listed
+ * from Claude Code 2.1.293 on), so a different version means a stale list.
+ */
+export const cliVersionTag = (version: string): string =>
+  `claude-code/${version}`;
+
 /**
  * Build the provider's `refreshModels` for pi 1.x.
  *
  * The list is the account's, as the CLI reports it, joined with pi's
  * catalogue. pi persists it, so a session starts from the stored list
- * without launching anything, and the CLI is asked again once the stored
- * list is a day old or pi forces a refresh. Whenever the CLI cannot be asked
- * or names no model, the stored list is kept, and without one the whole
- * built-in catalogue is.
+ * without launching anything. The CLI is asked again once the stored list is
+ * a day old, the installed CLI is not the version that produced it, or pi
+ * forces a refresh. Whenever the CLI cannot be asked or names no model, the
+ * stored list is kept, and without one the whole built-in catalogue is.
  */
 export function createModelRefresh(
   catalogue: ReadonlyArray<CatalogueModel>,
-  probe: (signal: AbortSignal) => Promise<ReadonlyArray<CliAccountModel>>,
+  probe: AccountModelsProbe,
   now: () => number = Date.now,
 ): (context: ModelRefreshContext) => Promise<ProviderModel[]> {
   return async (context) => {
     const stored = providerModelsFromStore(catalogue, context.stored);
     const fallback = stored ?? builtinProviderModels(catalogue);
     if (!context.allowNetwork) return fallback;
-    if (
-      stored !== undefined &&
-      context.force !== true &&
-      isAccountModelsFresh(context.stored, now())
-    )
-      return stored;
     try {
+      const version = await probe.version(context.signal);
+      // No CLI to ask; a call would report the missing CLI itself.
+      if (version === undefined) return fallback;
+      const tag = cliVersionTag(version);
+      if (
+        stored !== undefined &&
+        context.force !== true &&
+        context.stored?.etag === tag &&
+        isAccountModelsFresh(context.stored, now())
+      )
+        return stored;
       const models = providerModelsForAccount(
         catalogue,
-        await probe(context.signal),
+        await probe.models(context.signal),
       );
       if (models === undefined) return fallback;
       await context.publish({
@@ -290,6 +313,7 @@ export function createModelRefresh(
             baseUrl: PROVIDER_ID,
           })),
           checkedAt: now(),
+          etag: tag,
         },
       });
       return models;

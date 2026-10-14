@@ -55,9 +55,11 @@ export default function (pi: ExtensionAPI) {
     // is pi's whole Anthropic catalogue.
     const models = builtinProviderModels(catalogue);
     // The probe is loaded on demand: it brings Effect with it.
-    const refreshModels = createModelRefresh(catalogue, async (signal) =>
-      (await import("./src/model-probe.ts")).probeAccountModels(signal),
-    );
+    const probe = () => import("./src/model-probe.ts");
+    const refreshModels = createModelRefresh(catalogue, {
+      version: async (signal) => (await probe()).probeCliVersion(signal),
+      models: async (signal) => (await probe()).probeAccountModels(signal),
+    });
 
     // One runtime per extension instance: pi calls this factory once per
     // session and emits `session_shutdown` before tearing it down.

@@ -9,6 +9,7 @@ import {
   builtinProviderModels,
   type CatalogueModel,
   type CliAccountModel,
+  cliVersionTag,
   createModelRefresh,
   isAccountModelsFresh,
   type ModelRefreshContext,
@@ -261,8 +262,18 @@ describe("accountModelsEnabled", () => {
 
 describe("createModelRefresh", () => {
   const now = 1_800_000_000_000;
+  const VERSION = "2.1.299";
   const builtinIds = ids(builtinProviderModels(catalogue));
   const accountIds = ids(providerModelsForAccount(catalogue, account));
+
+  /** A CLI of `version` reporting `models`; both calls are spies. */
+  const cli = (
+    models: () => Promise<ReadonlyArray<CliAccountModel>> = async () => account,
+    version: string | undefined = VERSION,
+  ) => ({
+    version: vi.fn(async () => version),
+    models: vi.fn(models),
+  });
 
   const context = (overrides: Partial<ModelRefreshContext> = {}) => {
     const publish = vi.fn<ModelRefreshContext["publish"]>(async () => true);
@@ -286,21 +297,23 @@ describe("createModelRefresh", () => {
     contextWindow: 200_000,
     maxTokens: 64_000,
   };
-  const storedEntry = (checkedAt: number) => ({
+  const storedEntry = (checkedAt: number, version = VERSION) => ({
     checkedAt,
+    etag: cliVersionTag(version),
     models: [storedModel],
   });
 
   it("asks the CLI, persists the account's models and returns them", async () => {
-    const probe = vi.fn(async () => account);
+    const probe = cli();
     const ctx = context();
     const models = await createModelRefresh(catalogue, probe, () => now)(ctx);
 
     expect(ids(models)).toEqual(accountIds);
-    expect(probe).toHaveBeenCalledWith(ctx.signal);
+    expect(probe.models).toHaveBeenCalledWith(ctx.signal);
     expect(ctx.publish).toHaveBeenCalledTimes(1);
     const persist = ctx.publish.mock.calls[0]![0].persist;
     expect(persist?.checkedAt).toBe(now);
+    expect(persist?.etag).toBe("claude-code/2.1.299");
     expect(ids(persist?.models)).toEqual(accountIds);
     expect(persist?.models[0]).toMatchObject({
       api: "pi-claude-cli",
@@ -309,7 +322,7 @@ describe("createModelRefresh", () => {
   });
 
   it("never launches the CLI when pi forbids network access", async () => {
-    const probe = vi.fn(async () => account);
+    const probe = cli();
     const refresh = createModelRefresh(catalogue, probe, () => now);
 
     expect(ids(await refresh(context({ allowNetwork: false })))).toEqual(
@@ -322,55 +335,73 @@ describe("createModelRefresh", () => {
         ),
       ),
     ).toEqual(["claude-sonnet-5"]);
-    expect(probe).not.toHaveBeenCalled();
+    expect(probe.version).not.toHaveBeenCalled();
+    expect(probe.models).not.toHaveBeenCalled();
   });
 
-  it("serves a fresh stored list without asking the CLI", async () => {
-    const probe = vi.fn(async () => account);
+  it("serves a fresh stored list from the same CLI without asking for models", async () => {
+    const probe = cli();
     const ctx = context({ stored: storedEntry(now - 60_000) });
     const models = await createModelRefresh(catalogue, probe, () => now)(ctx);
 
     expect(ids(models)).toEqual(["claude-sonnet-5"]);
-    expect(probe).not.toHaveBeenCalled();
+    expect(probe.models).not.toHaveBeenCalled();
     expect(ctx.publish).not.toHaveBeenCalled();
   });
 
+  it("asks again when the CLI was updated, even within the day", async () => {
+    // The list from 2.1.292 lacks Haiku 5.5; 2.1.299 has it.
+    const probe = cli();
+    const ctx = context({ stored: storedEntry(now - 60_000, "2.1.292") });
+    await createModelRefresh(catalogue, probe, () => now)(ctx);
+    expect(probe.models).toHaveBeenCalledTimes(1);
+    expect(ctx.publish.mock.calls[0]![0].persist?.etag).toBe(
+      "claude-code/2.1.299",
+    );
+  });
+
+  it("asks again for a list stored without a CLI version", async () => {
+    const probe = cli();
+    const { etag: _, ...unversioned } = storedEntry(now - 60_000);
+    await createModelRefresh(
+      catalogue,
+      probe,
+      () => now,
+    )(context({ stored: unversioned }));
+    expect(probe.models).toHaveBeenCalledTimes(1);
+  });
+
   it("asks again when the stored list is a day old, or pi forces it", async () => {
-    const probe = vi.fn(async () => account);
+    const probe = cli();
     const refresh = createModelRefresh(catalogue, probe, () => now);
 
     await refresh(
       context({ stored: storedEntry(now - ACCOUNT_MODELS_TTL_MILLIS - 1) }),
     );
     await refresh(context({ stored: storedEntry(now - 1), force: true }));
-    expect(probe).toHaveBeenCalledTimes(2);
+    expect(probe.models).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to the built-in catalogue when the CLI cannot be asked", async () => {
-    const failing = createModelRefresh(
-      catalogue,
-      async () => {
-        throw new Error("spawn claude ENOENT");
-      },
-      () => now,
-    );
-    const empty = createModelRefresh(
-      catalogue,
-      async () => [],
-      () => now,
-    );
+    const missing = { ...cli(), version: vi.fn(async () => undefined) };
+    const failing = cli(async () => {
+      throw new Error("spawn claude ENOENT");
+    });
+    const empty = cli(async () => []);
 
-    for (const refresh of [failing, empty]) {
+    for (const probe of [missing, failing, empty]) {
       const ctx = context();
+      const refresh = createModelRefresh(catalogue, probe, () => now);
       expect(ids(await refresh(ctx))).toEqual(builtinIds);
       expect(ctx.publish).not.toHaveBeenCalled();
     }
+    expect(missing.models).not.toHaveBeenCalled();
   });
 
   it("prefers a stale stored list to the catalogue when the CLI fails", async () => {
     const refresh = createModelRefresh(
       catalogue,
-      async () => [],
+      cli(async () => []),
       () => now,
     );
     const models = await refresh(context({ stored: storedEntry(1) }));

@@ -10,7 +10,7 @@
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
 import { Config, Console, Data, Effect, FileSystem, Path } from "effect";
 import { accountModelIds } from "../../src/account-models.ts";
-import { probeAccountModels } from "../../src/model-probe.ts";
+import { probeAccountModels, probeCliVersion } from "../../src/model-probe.ts";
 import { nodeFileSystemLayer } from "../../src/node-platform.ts";
 
 class ModelProbeCheckFailed extends Data.TaggedError("ModelProbeCheckFailed")<{
@@ -36,6 +36,14 @@ const main = Effect.gen(function* () {
     `expected the stub's two models, got ${ids.join(",")}`,
   );
 
+  const version = yield* Effect.promise(() =>
+    probeCliVersion(new AbortController().signal),
+  );
+  yield* check(
+    version === "9.9.9",
+    `expected the stub's version, got ${version}`,
+  );
+
   const seen = yield* fs.readFileString(path.join(work, "env.json"));
   yield* check(
     seen.includes('"anthropic":[]'),
@@ -53,6 +61,13 @@ const main = Effect.gen(function* () {
     process.env.PATH = empty;
   });
   const missing = yield* probe;
+  const noVersion = yield* Effect.promise(() =>
+    probeCliVersion(new AbortController().signal),
+  );
+  yield* check(
+    noVersion === undefined,
+    `expected no version without a CLI, got ${noVersion}`,
+  );
   yield* check(
     missing.length === 0,
     `expected no models without a CLI, got ${missing.length}`,
