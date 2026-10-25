@@ -40,10 +40,7 @@ import {
 import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { SUBSCRIPTION_OVERRIDE_ENV_VARS } from "../../src/subscription-env.ts";
-import {
-  INBAND_MCP_CONFIG_JSON,
-  INBAND_MCP_SERVER_NAME,
-} from "../../src/mcp-inband.ts";
+import { INBAND_MCP_CONFIG_JSON, INBAND_MCP_SERVER_NAME } from "../../src/mcp-inband.ts";
 import {
   nodeChildProcessSpawnerLayer,
   nodeCryptoLayer,
@@ -151,8 +148,7 @@ const launchProbe = Effect.fn("Spike.launch")(function* (options: {
     });
 
   const outbound = yield* Queue.unbounded<string, Cause.Done>();
-  const send = (value: unknown) =>
-    Queue.offer(outbound, JSON.stringify(value) + "\n");
+  const send = (value: unknown) => Queue.offer(outbound, JSON.stringify(value) + "\n");
   const tools = yield* Ref.make<ReadonlyArray<ProbeTool>>([
     probeTool("probe_tool", "Returns the probe value."),
   ]);
@@ -204,9 +200,9 @@ const launchProbe = Effect.fn("Spike.launch")(function* (options: {
         result: { tools: yield* Ref.get(tools) },
       });
     if (method === "tools/call") {
-      const params = Schema.decodeUnknownOption(
-        Schema.Struct({ name: Schema.String }),
-      )(message.params);
+      const params = Schema.decodeUnknownOption(Schema.Struct({ name: Schema.String }))(
+        message.params,
+      );
       return yield* Queue.offer(toolCalls, {
         requestId,
         rpcId: id,
@@ -229,9 +225,7 @@ const launchProbe = Effect.fn("Spike.launch")(function* (options: {
       if (request?.subtype === "mcp_message" && request.message !== undefined)
         return yield* handleMcp(line.request_id, request.message);
       if (request?.subtype === "can_use_tool") {
-        yield* log(
-          `CLI → can_use_tool ${request.tool_name} tool_use_id=${request.tool_use_id}`,
-        );
+        yield* log(`CLI → can_use_tool ${request.tool_name} tool_use_id=${request.tool_use_id}`);
         return yield* send({
           type: "control_response",
           response: {
@@ -250,18 +244,12 @@ const launchProbe = Effect.fn("Spike.launch")(function* (options: {
       return yield* Queue.offer(controlResponses, line);
     }
     if (line.type === "system" && line.subtype === "init")
-      return yield* log(
-        `CLI → system init tools=${JSON.stringify(line.tools)}`,
-      );
+      return yield* log(`CLI → system init tools=${JSON.stringify(line.tools)}`);
     if (line.type === "stream_event") {
       const block = line.event?.content_block;
-      if (
-        line.event?.type === "content_block_start" &&
-        block?.type === "tool_use"
-      )
+      if (line.event?.type === "content_block_start" && block?.type === "tool_use")
         yield* log(`CLI → tool_use ${block.name} ${block.id}`);
-      else if (line.event?.type === "message_stop")
-        yield* log("CLI → message_stop");
+      else if (line.event?.type === "message_stop") yield* log("CLI → message_stop");
       return;
     }
     if (line.type === "result") {
@@ -315,9 +303,7 @@ const launchProbe = Effect.fn("Spike.launch")(function* (options: {
           DISABLE_COMPACT: "1",
           ENABLE_TOOL_SEARCH: "false",
           MCP_TOOL_TIMEOUT: Option.getOrUndefined(options.mcpToolTimeoutMillis),
-          ...Object.fromEntries(
-            SUBSCRIPTION_OVERRIDE_ENV_VARS.map((name) => [name, undefined]),
-          ),
+          ...Object.fromEntries(SUBSCRIPTION_OVERRIDE_ENV_VARS.map((name) => [name, undefined])),
         },
         stdin: Stream.fromQueue(outbound).pipe(Stream.encodeText),
         detached: false,
@@ -402,9 +388,7 @@ const modes = {
       yield* Effect.sleep("2 seconds");
       yield* probe.control("spike-status-2", { subtype: "mcp_status" });
       // A removal travels the same way as an addition.
-      yield* Ref.update(probe.tools, (tools) =>
-        tools.filter((tool) => tool.name !== "probe_tool"),
-      );
+      yield* Ref.update(probe.tools, (tools) => tools.filter((tool) => tool.name !== "probe_tool"));
       yield* probe.notifyToolsChanged;
       yield* Effect.sleep("2 seconds");
       yield* probe.control("spike-status-3", { subtype: "mcp_status" });
@@ -467,9 +451,7 @@ const modes = {
       );
       if (Option.isNone(outcome))
         return yield* probe.log("FINDING: the model did not call second_tool");
-      yield* probe.log(
-        `FINDING: the model called ${outcome.value.toolName} on the live process`,
-      );
+      yield* probe.log(`FINDING: the model called ${outcome.value.toolName} on the live process`);
       yield* probe.answerToolCall(outcome.value, "second-value-7");
       yield* probe.nextResult;
     }),
@@ -502,12 +484,8 @@ const modes = {
         Effect.as(probe.nextResult, Option.none<OpenToolCall>()),
       );
       if (Option.isNone(outcome))
-        return yield* probe.log(
-          "FINDING: no tools/call for the removed tool reached the server",
-        );
-      yield* probe.log(
-        `FINDING: the CLI still called the removed ${outcome.value.toolName}`,
-      );
+        return yield* probe.log("FINDING: no tools/call for the removed tool reached the server");
+      yield* probe.log(`FINDING: the CLI still called the removed ${outcome.value.toolName}`);
       yield* probe.answerToolCall(outcome.value, "second-value-7");
       yield* probe.nextResult;
     }),
@@ -535,12 +513,8 @@ const modes = {
         Effect.as(probe.nextResult, Option.none<OpenToolCall>()),
       );
       if (Option.isNone(outcome))
-        return yield* probe.log(
-          "FINDING: the turn ended without a second_tool call",
-        );
-      yield* probe.log(
-        `FINDING: the model called ${outcome.value.toolName} in the same turn`,
-      );
+        return yield* probe.log("FINDING: the turn ended without a second_tool call");
+      yield* probe.log(`FINDING: the model called ${outcome.value.toolName} in the same turn`);
       yield* probe.answerToolCall(outcome.value, "second-value-7");
       yield* probe.nextResult;
     }),
@@ -562,9 +536,7 @@ const spikeCommand = Command.make(
   "inband-mcp",
   {
     mode: Argument.Literals("mode", MODE_NAMES).pipe(
-      Argument.withDescription(
-        "probe spends no tokens; the others run one or two haiku turns",
-      ),
+      Argument.withDescription("probe spends no tokens; the others run one or two haiku turns"),
     ),
     claude: Flag.String("claude").pipe(
       Flag.withDescription("The Claude Code binary to probe"),
@@ -574,15 +546,12 @@ const spikeCommand = Command.make(
   Effect.fn("Spike.main")(function* (input) {
     const probe = yield* launchProbe({
       claude: input.claude,
-      mcpToolTimeoutMillis:
-        input.mode === "timeout" ? Option.some("2000") : Option.none(),
+      mcpToolTimeoutMillis: input.mode === "timeout" ? Option.some("2000") : Option.none(),
     });
     yield* modes[input.mode](probe).pipe(Effect.timeoutOption("90 seconds"));
   }, Effect.scoped),
 ).pipe(
-  Command.withDescription(
-    "Probe Claude Code's in-band MCP server on the stdio control channel",
-  ),
+  Command.withDescription("Probe Claude Code's in-band MCP server on the stdio control channel"),
 );
 
 NodeRuntime.runMain(

@@ -20,9 +20,7 @@ class ModelProbeCheckFailed extends Data.TaggedError("ModelProbeCheckFailed")<{
 const check = (condition: boolean, message: string) =>
   condition ? Effect.void : Effect.fail(new ModelProbeCheckFailed({ message }));
 
-const probe = Effect.promise(() =>
-  probeAccountModels(new AbortController().signal),
-);
+const probe = Effect.promise(() => probeAccountModels(new AbortController().signal));
 
 const main = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -36,13 +34,8 @@ const main = Effect.gen(function* () {
     `expected the stub's two models, got ${ids.join(",")}`,
   );
 
-  const version = yield* Effect.promise(() =>
-    probeCliVersion(new AbortController().signal),
-  );
-  yield* check(
-    version === "9.9.9",
-    `expected the stub's version, got ${version}`,
-  );
+  const version = yield* Effect.promise(() => probeCliVersion(new AbortController().signal));
+  yield* check(version === "9.9.9", `expected the stub's version, got ${version}`);
 
   const seen = yield* fs.readFileString(path.join(work, "env.json"));
   yield* check(
@@ -61,19 +54,9 @@ const main = Effect.gen(function* () {
     process.env.PATH = empty;
   });
   const missing = yield* probe;
-  const noVersion = yield* Effect.promise(() =>
-    probeCliVersion(new AbortController().signal),
-  );
-  yield* check(
-    noVersion === undefined,
-    `expected no version without a CLI, got ${noVersion}`,
-  );
-  yield* check(
-    missing.length === 0,
-    `expected no models without a CLI, got ${missing.length}`,
-  );
+  const noVersion = yield* Effect.promise(() => probeCliVersion(new AbortController().signal));
+  yield* check(noVersion === undefined, `expected no version without a CLI, got ${noVersion}`);
+  yield* check(missing.length === 0, `expected no models without a CLI, got ${missing.length}`);
 });
 
-NodeRuntime.runMain(
-  main.pipe(Effect.scoped, Effect.provide(nodeFileSystemLayer)),
-);
+NodeRuntime.runMain(main.pipe(Effect.scoped, Effect.provide(nodeFileSystemLayer)));

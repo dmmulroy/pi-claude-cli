@@ -11,16 +11,7 @@
  * at pi start would cost every session.
  */
 
-import {
-  type Cause,
-  Duration,
-  Effect,
-  Layer,
-  Option,
-  Queue,
-  Schema,
-  Stream,
-} from "effect";
+import { type Cause, Duration, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { CliAccountModel } from "./account-models.ts";
 import { SUBSCRIPTION_OVERRIDE_ENV_VARS } from "./subscription-env.ts";
@@ -65,9 +56,7 @@ export const probeEnvironment = (): Record<string, string | undefined> => ({
   CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
   ENABLE_CLAUDEAI_MCP_SERVERS: "false",
   DISABLE_AUTOUPDATER: "1",
-  ...Object.fromEntries(
-    SUBSCRIPTION_OVERRIDE_ENV_VARS.map((name) => [name, undefined]),
-  ),
+  ...Object.fromEntries(SUBSCRIPTION_OVERRIDE_ENV_VARS.map((name) => [name, undefined])),
 });
 
 const InitializeResponse = Schema.fromJsonString(
@@ -105,9 +94,7 @@ export const accountModelsFromLine = (
 ): Option.Option<ReadonlyArray<CliAccountModel>> =>
   decodeInitializeResponse(line.trim()).pipe(
     Option.map((envelope) =>
-      envelope.response.subtype === "success"
-        ? (envelope.response.response?.models ?? [])
-        : [],
+      envelope.response.subtype === "success" ? (envelope.response.response?.models ?? []) : [],
     ),
   );
 
@@ -126,43 +113,42 @@ export const initializeRequestLine = (): string =>
  *   time, could not be started, or reported none. Never fails: the caller
  *   falls back to the list it already has.
  */
-export const requestAccountModels = Effect.fn(
-  "ModelProbe.requestAccountModels",
-  { root: true },
-)(function* () {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const outbound = yield* Queue.unbounded<string, Cause.Done>();
-  const answer = Effect.gen(function* () {
-    const handle = yield* spawner.spawn(
-      ChildProcess.make("claude", PROBE_ARGUMENTS, {
-        extendEnv: true,
-        env: probeEnvironment(),
-        stdin: Stream.fromQueue(outbound).pipe(Stream.encodeText),
-        // Its own process group, killed as one when the scope closes.
-        detached: true,
-        killSignal: "SIGKILL",
-      }),
-    );
-    yield* Queue.offer(outbound, initializeRequestLine());
-    return yield* handle.stdout.pipe(
-      Stream.decodeText(),
-      Stream.splitLines,
-      Stream.map(accountModelsFromLine),
-      Stream.filter(Option.isSome),
-      Stream.runHead,
+export const requestAccountModels = Effect.fn("ModelProbe.requestAccountModels", { root: true })(
+  function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const outbound = yield* Queue.unbounded<string, Cause.Done>();
+    const answer = Effect.gen(function* () {
+      const handle = yield* spawner.spawn(
+        ChildProcess.make("claude", PROBE_ARGUMENTS, {
+          extendEnv: true,
+          env: probeEnvironment(),
+          stdin: Stream.fromQueue(outbound).pipe(Stream.encodeText),
+          // Its own process group, killed as one when the scope closes.
+          detached: true,
+          killSignal: "SIGKILL",
+        }),
+      );
+      yield* Queue.offer(outbound, initializeRequestLine());
+      return yield* handle.stdout.pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.map(accountModelsFromLine),
+        Stream.filter(Option.isSome),
+        Stream.runHead,
+        Effect.map(Option.flatten),
+      );
+    });
+    const models = yield* answer.pipe(
+      Effect.scoped,
+      Effect.timeoutOption(PROBE_TIMEOUT),
       Effect.map(Option.flatten),
+      Effect.orElseSucceed(() => Option.none<ReadonlyArray<CliAccountModel>>()),
+      Effect.map(Option.getOrElse((): ReadonlyArray<CliAccountModel> => [])),
     );
-  });
-  const models = yield* answer.pipe(
-    Effect.scoped,
-    Effect.timeoutOption(PROBE_TIMEOUT),
-    Effect.map(Option.flatten),
-    Effect.orElseSucceed(() => Option.none<ReadonlyArray<CliAccountModel>>()),
-    Effect.map(Option.getOrElse((): ReadonlyArray<CliAccountModel> => [])),
-  );
-  yield* Effect.annotateCurrentSpan({ models: models.length });
-  return models;
-});
+    yield* Effect.annotateCurrentSpan({ models: models.length });
+    return models;
+  },
+);
 
 /** How long `claude --version` may take. */
 const VERSION_TIMEOUT = Duration.seconds(5);
@@ -199,14 +185,9 @@ export const requestCliVersion = Effect.fn("ModelProbe.requestCliVersion", {
 const probeLayer = Layer.merge(nodeChildProcessSpawnerLayer, tracingLayer);
 
 /** The installed CLI's version, for `index.ts`; undefined when there is none. */
-export const probeCliVersion = (
-  signal: AbortSignal,
-): Promise<string | undefined> =>
+export const probeCliVersion = (signal: AbortSignal): Promise<string | undefined> =>
   Effect.runPromise(
-    requestCliVersion().pipe(
-      Effect.map(Option.getOrUndefined),
-      Effect.provide(probeLayer),
-    ),
+    requestCliVersion().pipe(Effect.map(Option.getOrUndefined), Effect.provide(probeLayer)),
     { signal },
   );
 
@@ -214,9 +195,7 @@ export const probeCliVersion = (
  * The boundary with `index.ts`: no Effect types. Aborting `signal` ends the
  * probe and its process.
  */
-export const probeAccountModels = (
-  signal: AbortSignal,
-): Promise<ReadonlyArray<CliAccountModel>> =>
+export const probeAccountModels = (signal: AbortSignal): Promise<ReadonlyArray<CliAccountModel>> =>
   Effect.runPromise(requestAccountModels().pipe(Effect.provide(probeLayer)), {
     signal,
   });

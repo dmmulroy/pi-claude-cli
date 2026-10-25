@@ -9,29 +9,30 @@ Read [README.md](README.md), [docs/CONTEXT-POLICY.md](docs/CONTEXT-POLICY.md) an
 ## Commands
 
 ```bash
-npm ci
-npm run typecheck
-npm run lint
-npm run format:check
-npm run test:coverage     # unit tests of the pure modules
-npm run test:scenarios    # the gate for the Effect services: stub scenarios + trace assertions
-npm run test:e2e          # real pi, stub CLI
+vp install                # pnpm, through Vite+
+vp check                  # oxfmt + oxlint (type-aware) + type check
+vp check --fix            # format and apply lint fixes
+vp test                   # unit tests
+vp run test:coverage      # unit tests of the pure modules, with coverage floors
+vp run test:scenarios     # the gate for the Effect services: stub scenarios + trace assertions
+vp run test:e2e           # real pi, stub CLI
+vp run ready              # all of the above
 node scripts/scenarios.ts --live   # spends subscription tokens
-PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts tests/live-structured-import.test.ts   # spends more
+PI_OWNED_LIVE=1 vp test tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts tests/live-structured-import.test.ts   # spends more
 ```
 
-Coverage floors: 92% lines/functions/statements, 85% branches, over the pure modules listed in `vitest.config.ts`. The services have no unit tests; `test:scenarios` is their gate.
+Coverage floors: 92% lines/functions/statements, 85% branches, over the pure modules listed under `test.coverage` in `vite.config.ts`. The services have no unit tests; `test:scenarios` is their gate.
 
 ## Traces are the feedback loop
 
 Every service operation is a span, and the provider writes spans as NDJSON by default (`~/.local/state/pi-claude-cli/traces/<date>.ndjson`; `PI_CLAUDE_CLI_TRACE=<path>` redirects, `=off` disables). Debug and verify by running something and reading its trace, in preference to adding tests.
 
 ```bash
-npm run trace -- tree --last                  # the most recent trace of any pi session
-npm run trace -- run -- <command>             # run with a fresh trace file, print the tree
-npm run trace -- tree --run                   # the last `run` again
-npm run trace -- assert --run --name episode --attr mode=turn --count 1
-npm run trace -- open --run                   # spans that never ended: a leak
+vp run trace -- tree --last                  # the most recent trace of any pi session
+vp run trace -- run -- <command>             # run with a fresh trace file, print the tree
+vp run trace -- tree --run                   # the last `run` again
+vp run trace -- assert --run --name episode --attr mode=turn --count 1
+vp run trace -- open --run                   # spans that never ended: a leak
 node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace file
 ```
 
@@ -73,6 +74,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 ## Conventions
 
 - Effect everywhere, including scripts, following `docs/coding-standards.md`. The exceptions are `index.ts` and what it imports eagerly (`account-models`, `cli-auth`, `event-bridge`, `overflow`, `signed-thinking`, `subscription-env`, `thinking-config`, `terminal-event`), which must not import Effect, and the stub CLI.
+- Vite+ owns the tooling: `vite.config.ts` configures oxfmt, oxlint (type-aware, with type checking) and the tests. Import test APIs from `vite-plus/test`, never `vitest`. Develop with pnpm (`packageManager`), but keep the package installable by npm: pi installs git packages with the user's package manager, and npm refuses a `devEngines` package-manager requirement.
 - Layers never fail. A failed layer build is remembered for the life of the runtime; record the failure in the service and report it per episode instead.
 - Never await a `retire` on a path that ends pi's stream; use `pool.retireInBackground`.
 - The package is an ES module and local TypeScript is imported with `.ts` specifiers, so `node scripts/x.ts` runs under Node's type stripping (Node 22.18+). That rules out enums, namespaces and parameter properties.

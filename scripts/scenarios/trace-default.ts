@@ -11,10 +11,7 @@
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
 import { Console, Data, Effect, FileSystem, Layer, Path } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import {
-  nodeChildProcessSpawnerLayer,
-  nodeFileSystemLayer,
-} from "../../src/node-platform.ts";
+import { nodeChildProcessSpawnerLayer, nodeFileSystemLayer } from "../../src/node-platform.ts";
 import {
   dailyTraceFileName,
   TRACE_DIRECTORY_MODE,
@@ -22,14 +19,12 @@ import {
   TRACE_RETENTION_DAYS,
 } from "../../src/trace-location.ts";
 
-class TraceLocationCheckFailed extends Data.TaggedError(
-  "TraceLocationCheckFailed",
-)<{ readonly message: string }> {}
+class TraceLocationCheckFailed extends Data.TaggedError("TraceLocationCheckFailed")<{
+  readonly message: string;
+}> {}
 
 const check = (condition: boolean, message: string) =>
-  condition
-    ? Effect.void
-    : Effect.fail(new TraceLocationCheckFailed({ message }));
+  condition ? Effect.void : Effect.fail(new TraceLocationCheckFailed({ message }));
 
 const MILLIS_PER_DAY = 86_400_000;
 const PERMISSION_BITS = 0o777;
@@ -109,19 +104,12 @@ const main = Effect.gen(function* () {
     !(yield* fs.exists(expired)),
     `expected a trace file older than ${TRACE_RETENTION_DAYS} days to be pruned`,
   );
-  yield* check(
-    yield* fs.exists(recent),
-    "a trace file inside the retention window was pruned",
-  );
+  yield* check(yield* fs.exists(recent), "a trace file inside the retention window was pruned");
   yield* Console.log("trace default location ok");
 }).pipe(
   Effect.scoped,
-  Effect.tapError((error) =>
-    Console.error(`scenario FAILED: ${error.message}`),
-  ),
-  Effect.provide(
-    Layer.merge(nodeFileSystemLayer, nodeChildProcessSpawnerLayer),
-  ),
+  Effect.tapError((error) => Console.error(`scenario FAILED: ${error.message}`)),
+  Effect.provide(Layer.merge(nodeFileSystemLayer, nodeChildProcessSpawnerLayer)),
 );
 
 NodeRuntime.runMain(main, { disableErrorReporting: true });

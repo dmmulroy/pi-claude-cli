@@ -54,10 +54,9 @@ export interface IProviderConfig {
 }
 
 /** Provides the provider configuration. */
-export class ProviderConfig extends Context.Service<
-  ProviderConfig,
-  IProviderConfig
->()("pi-claude-cli/ProviderConfig") {}
+export class ProviderConfig extends Context.Service<ProviderConfig, IProviderConfig>()(
+  "pi-claude-cli/ProviderConfig",
+) {}
 
 const DEFAULT_INACTIVITY_TIMEOUT_MILLIS = 300_000;
 /**
@@ -86,9 +85,7 @@ const positiveMillis = (text: Option.Option<string>): Option.Option<number> =>
 
 const millisOrDefault = (name: string, fallback: number) =>
   envText(name).pipe(
-    Effect.map((text) =>
-      Duration.millis(Option.getOrElse(positiveMillis(text), () => fallback)),
-    ),
+    Effect.map((text) => Duration.millis(Option.getOrElse(positiveMillis(text), () => fallback))),
   );
 
 const KEEPALIVE_OFF_VALUES = new Set(["0", "off", "false", "none"]);
@@ -99,9 +96,7 @@ const keepalive = envText("PI_CLAUDE_CLI_KEEPALIVE_MS").pipe(
     if (Option.exists(text, (v) => KEEPALIVE_OFF_VALUES.has(v.toLowerCase())))
       return Option.none<Duration.Duration>();
     return Option.some(
-      Duration.millis(
-        Option.getOrElse(positiveMillis(text), () => DEFAULT_KEEPALIVE_MILLIS),
-      ),
+      Duration.millis(Option.getOrElse(positiveMillis(text), () => DEFAULT_KEEPALIVE_MILLIS)),
     );
   }),
 );
@@ -109,9 +104,7 @@ const keepalive = envText("PI_CLAUDE_CLI_KEEPALIVE_MS").pipe(
 const TRUTHY_FLAG_VALUES = new Set(["1", "true", "yes"]);
 
 const envFlag = (name: string) =>
-  envText(name).pipe(
-    Effect.map(Option.exists((v) => TRUTHY_FLAG_VALUES.has(v.toLowerCase()))),
-  );
+  envText(name).pipe(Effect.map(Option.exists((v) => TRUTHY_FLAG_VALUES.has(v.toLowerCase()))));
 
 const traceWireDetail = envText("PI_CLAUDE_CLI_TRACE_WIRE").pipe(
   Effect.map((text): TraceWireDetail => {
@@ -123,9 +116,7 @@ const traceWireDetail = envText("PI_CLAUDE_CLI_TRACE_WIRE").pipe(
 
 const historyImport = envText("PI_CLAUDE_CLI_IMPORT").pipe(
   Effect.map((text): HistoryImport =>
-    Option.exists(text, (value) => value.toLowerCase() === "flat")
-      ? "flat"
-      : "structured",
+    Option.exists(text, (value) => value.toLowerCase() === "flat") ? "flat" : "structured",
   ),
 );
 
@@ -144,10 +135,7 @@ export const makeProviderConfig = Effect.gen(function* () {
       DEFAULT_HANDOFF_WAIT_MILLIS,
     ),
     handoffProxy:
-      Option.getOrElse(
-        yield* envText("PI_CLAUDE_CLI_HANDOFF_PROXY"),
-        () => "1",
-      ) !== "0",
+      Option.getOrElse(yield* envText("PI_CLAUDE_CLI_HANDOFF_PROXY"), () => "1") !== "0",
     settingsPath: yield* envText("PI_CLAUDE_CLI_SETTINGS"),
     mcpToolTimeoutMillis: Option.getOrElse(
       yield* envText("MCP_TOOL_TIMEOUT"),

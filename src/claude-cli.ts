@@ -85,9 +85,7 @@ const notInstalled = new CliRequirementError({
     "Claude Code CLI not found. Install it: npm install -g @anthropic-ai/claude-code\nThen authenticate by running `claude` and using `/login`.",
 });
 
-const AuthStatus = Schema.fromJsonString(
-  Schema.Struct({ loggedIn: Schema.Boolean }),
-);
+const AuthStatus = Schema.fromJsonString(Schema.Struct({ loggedIn: Schema.Boolean }));
 const decodeAuthStatus = Schema.decodeOption(AuthStatus);
 
 /** The launch flags. pi's prompt and session id are the only variable values. */
@@ -164,9 +162,7 @@ export const launchEnvironment = (
   CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
   MCP_TOOL_TIMEOUT: mcpToolTimeoutMillis,
   // `undefined` removes the variable from the inherited environment.
-  ...Object.fromEntries(
-    SUBSCRIPTION_OVERRIDE_ENV_VARS.map((name) => [name, undefined]),
-  ),
+  ...Object.fromEntries(SUBSCRIPTION_OVERRIDE_ENV_VARS.map((name) => [name, undefined])),
   // The unattended-session watchdog retries capacity errors indefinitely
   // and overrides the retry count above.
   CLAUDE_CODE_RETRY_WATCHDOG: undefined,
@@ -220,9 +216,7 @@ export const makeClaudeCli = Effect.gen(function* () {
    */
   const checkAuth = Effect.fn("ClaudeCli.checkAuth")(function* () {
     const output = yield* probe(["auth", "status"]).pipe(
-      Effect.catchTag("PlatformError", () =>
-        Effect.succeed(Option.none<string>()),
-      ),
+      Effect.catchTag("PlatformError", () => Effect.succeed(Option.none<string>())),
     );
     const loggedIn = output.pipe(
       Option.flatMap((text) => decodeAuthStatus(text.trim())),
@@ -232,9 +226,7 @@ export const makeClaudeCli = Effect.gen(function* () {
       loggedIn: Option.getOrElse(loggedIn, () => "unknown"),
     });
     if (Option.contains(loggedIn, false))
-      yield* Effect.logWarning(
-        "Claude CLI is not authenticated. Run `claude` and use `/login`.",
-      );
+      yield* Effect.logWarning("Claude CLI is not authenticated. Run `claude` and use `/login`.");
   });
 
   return ClaudeCli.of({
@@ -294,14 +286,9 @@ export const makeClaudeCli = Effect.gen(function* () {
 });
 
 /** Provides the CLI launcher without selecting a spawner or configuration. */
-export const claudeCliLayerWithoutDependencies = Layer.effect(
-  ClaudeCli,
-  makeClaudeCli,
-);
+export const claudeCliLayerWithoutDependencies = Layer.effect(ClaudeCli, makeClaudeCli);
 
 /** Provides the CLI launcher over Node's spawner and the process environment. */
 export const claudeCliLayer = claudeCliLayerWithoutDependencies.pipe(
-  Layer.provide(
-    Layer.mergeAll(nodeChildProcessSpawnerLayer, providerConfigLayer),
-  ),
+  Layer.provide(Layer.mergeAll(nodeChildProcessSpawnerLayer, providerConfigLayer)),
 );

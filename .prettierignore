@@ -1,7 +1,0 @@
-package/
-node_modules/
-dist/
-coverage/
-*.tsbuildinfo
-package-lock.json
-.planning/

@@ -1,15 +1,9 @@
 import { execFile } from "node:child_process";
-import {
-  copyFileSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-} from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vite-plus/test";
 
 /**
  * Smoke test against the pi this repository installs: the real pi binary
@@ -20,10 +14,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 const repo = resolve(__dirname, "..");
 // The package exports no `./package.json`, so it is read from where npm put it.
-const piPackagePath = join(
-  repo,
-  "node_modules/@earendil-works/pi-coding-agent/package.json",
-);
+const piPackagePath = join(repo, "node_modules/@earendil-works/pi-coding-agent/package.json");
 const piPackage: { version: string; bin: Record<string, string> } = JSON.parse(
   readFileSync(piPackagePath, "utf8"),
 );
@@ -64,9 +55,7 @@ describe("the installed pi", () => {
         },
       },
     );
-    return stdout
-      .split("\n")
-      .filter((line) => line.startsWith("pi-claude-cli"));
+    return stdout.split("\n").filter((line) => line.startsWith("pi-claude-cli"));
   };
 
   it("loads the extension and registers the pi-claude-cli provider", async () => {
@@ -74,10 +63,7 @@ describe("the installed pi", () => {
     const bin = join(scratch, "bin");
     mkdirSync(bin, { recursive: true });
     copyFileSync(join(repo, "tests/e2e/claude-stub.cjs"), join(bin, "claude"));
-    const rows = await listedModels(
-      "stub",
-      `${bin}:${dirname(process.execPath)}`,
-    );
+    const rows = await listedModels("stub", `${bin}:${dirname(process.execPath)}`);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.some((row) => /\bclaude-haiku-4-5\b/.test(row))).toBe(true);
   }, 90_000);

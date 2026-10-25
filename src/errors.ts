@@ -6,9 +6,7 @@
 import { Data, Option } from "effect";
 
 /** The installed CLI or its environment cannot provide what pi needs. */
-export class CliRequirementError extends Data.TaggedError(
-  "CliRequirementError",
-)<{
+export class CliRequirementError extends Data.TaggedError("CliRequirementError")<{
   readonly reason: "NotInstalled" | "VersionTooOld" | "RestrictedMode";
   readonly message: string;
 }> {}
@@ -19,9 +17,7 @@ export class CliSpawnError extends Data.TaggedError("CliSpawnError")<{
 }> {}
 
 /** The private runtime directory or a file in it could not be written. */
-export class RuntimeDirectoryError extends Data.TaggedError(
-  "RuntimeDirectoryError",
-)<{
+export class RuntimeDirectoryError extends Data.TaggedError("RuntimeDirectoryError")<{
   readonly operation: "CreateDirectory" | "StageSystemPrompt";
   readonly message: string;
 }> {}
@@ -60,9 +56,7 @@ export class CliResultError extends Data.TaggedError("CliResultError")<{
  * `PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS` is not set. The message contains
  * "billing", so pi does not retry it.
  */
-export class UsageCreditsChargeError extends Data.TaggedError(
-  "UsageCreditsChargeError",
-)<{
+export class UsageCreditsChargeError extends Data.TaggedError("UsageCreditsChargeError")<{
   readonly message: string;
 }> {}
 
@@ -78,9 +72,7 @@ export class ModelStopError extends Data.TaggedError("ModelStopError")<{
  * same message, so what pi received cannot be trusted; above all a tool
  * call's arguments.
  */
-export class StreamMismatchError extends Data.TaggedError(
-  "StreamMismatchError",
-)<{
+export class StreamMismatchError extends Data.TaggedError("StreamMismatchError")<{
   readonly message: string;
 }> {}
 

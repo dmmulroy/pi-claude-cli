@@ -56,13 +56,10 @@ export type AssistantMessageWithMetadata = AssistantMessage & {
  * calls, in order. Thinking is left out, since pi may show a summary of it;
  * so are timestamps, usage and stop reason.
  */
-export function assistantContentFingerprint(
-  content: AssistantMessage["content"],
-): string {
+export function assistantContentFingerprint(content: AssistantMessage["content"]): string {
   const visible = content.flatMap((block) => {
     if (block.type === "text") return [["text", block.text]];
-    if (block.type === "toolCall")
-      return [["toolCall", block.id, block.name, block.arguments]];
+    if (block.type === "toolCall") return [["toolCall", block.id, block.name, block.arguments]];
     return [];
   });
   return createHash("sha256").update(JSON.stringify(visible)).digest("hex");
@@ -96,11 +93,7 @@ function readBlock(value: unknown): SignedThinkingBlock | undefined {
       thinking: value.thinking,
       signature: value.signature,
     };
-  if (
-    value.type === "redacted_thinking" &&
-    typeof value.data === "string" &&
-    value.data.length > 0
-  )
+  if (value.type === "redacted_thinking" && typeof value.data === "string" && value.data.length > 0)
     return { type: "redacted_thinking", data: value.data };
   return undefined;
 }
@@ -110,9 +103,7 @@ function readBlock(value: unknown): SignedThinkingBlock | undefined {
  * session file, so the metadata is read as unknown input: anything that is
  * not complete and well formed is none.
  */
-export function readSignedThinking(
-  message: AssistantMessage,
-): SignedThinking | undefined {
+export function readSignedThinking(message: AssistantMessage): SignedThinking | undefined {
   const metadata: unknown = Reflect.get(message, PROVIDER_METADATA_KEY);
   const stored = isRecord(metadata) ? metadata.signedThinking : undefined;
   if (!isRecord(stored)) return undefined;
@@ -128,12 +119,7 @@ export function readSignedThinking(
   for (const entry of blocks) {
     const block = isRecord(entry) ? readBlock(entry.block) : undefined;
     const at = isRecord(entry) ? entry.at : undefined;
-    if (
-      block === undefined ||
-      typeof at !== "number" ||
-      !Number.isInteger(at) ||
-      at < 0
-    )
+    if (block === undefined || typeof at !== "number" || !Number.isInteger(at) || at < 0)
       return undefined;
     read.push({ at, block });
   }
@@ -153,7 +139,5 @@ export function replayableSignedThinking(
   if (message.model !== modelId) return undefined;
   const signed = readSignedThinking(message);
   if (signed === undefined || signed.model !== modelId) return undefined;
-  return signed.fingerprint === assistantContentFingerprint(message.content)
-    ? signed
-    : undefined;
+  return signed.fingerprint === assistantContentFingerprint(message.content) ? signed : undefined;
 }

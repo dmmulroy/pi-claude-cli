@@ -5,10 +5,7 @@
  * provider that failed to load, before any runtime exists.
  */
 
-import type {
-  AssistantMessage,
-  AssistantMessageEventStream,
-} from "@earendil-works/pi-ai";
+import type { AssistantMessage, AssistantMessageEventStream } from "@earendil-works/pi-ai";
 
 /** End the stream successfully with the accumulated message. */
 export function endStreamWithDone(

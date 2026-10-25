@@ -19,14 +19,10 @@ export interface TraceRenderOptions {
   readonly attributes: boolean;
 }
 
-const paint = (
-  options: { readonly color: boolean },
-  code: string,
-  text: string,
-) => (options.color ? `\x1b[${code}m${text}\x1b[0m` : text);
+const paint = (options: { readonly color: boolean }, code: string, text: string) =>
+  options.color ? `\x1b[${code}m${text}\x1b[0m` : text;
 
-const dim = (options: { readonly color: boolean }, text: string) =>
-  paint(options, "2", text);
+const dim = (options: { readonly color: boolean }, text: string) => paint(options, "2", text);
 
 /** `1.50ms`, `42ms` or `1.25s`. */
 export const formatTraceMillis = (millis: number): string => {
@@ -58,24 +54,14 @@ const formatAttributes = (
     .join(" ");
 
 /** Span attributes as `k=v` pairs, without Effect's source locations. */
-export const formatTraceSpanAttributes = (
-  attributes: Readonly<Record<string, unknown>>,
-): string => formatAttributes(attributes, (key) => key.startsWith("code."));
+export const formatTraceSpanAttributes = (attributes: Readonly<Record<string, unknown>>): string =>
+  formatAttributes(attributes, (key) => key.startsWith("code."));
 
 /** Event attributes as `k=v` pairs, without the fiber id and log level. */
-export const formatTraceEventAttributes = (
-  attributes: Readonly<Record<string, unknown>>,
-): string =>
-  formatAttributes(
-    attributes,
-    (key) => key === "effect.fiberId" || key === "effect.logLevel",
-  );
+export const formatTraceEventAttributes = (attributes: Readonly<Record<string, unknown>>): string =>
+  formatAttributes(attributes, (key) => key === "effect.fiberId" || key === "effect.logLevel");
 
-const spanSummary = (
-  span: TraceSpan,
-  model: TraceModel,
-  options: TraceRenderOptions,
-): string =>
+const spanSummary = (span: TraceSpan, model: TraceModel, options: TraceRenderOptions): string =>
   [
     span.name,
     dim(options, formatTraceMillis(traceSpanDurationMs(span, model))),
@@ -102,18 +88,12 @@ interface EventRun {
 }
 
 /** Consecutive identical events collapse to one `name ×N` line. */
-const collapseEvents = (
-  events: ReadonlyArray<TraceSpanEvent>,
-): ReadonlyArray<EventRun> => {
+const collapseEvents = (events: ReadonlyArray<TraceSpanEvent>): ReadonlyArray<EventRun> => {
   const runs: Array<EventRun> = [];
   for (const event of events) {
     const attributes = formatTraceEventAttributes(event.attributes);
     const last = runs[runs.length - 1];
-    if (
-      last !== undefined &&
-      last.name === event.name &&
-      last.attributes === attributes
-    ) {
+    if (last !== undefined && last.name === event.name && last.attributes === attributes) {
       runs[runs.length - 1] = {
         ...last,
         count: last.count + 1,
@@ -152,18 +132,16 @@ const renderSpanTree = (
   for (const link of span.links) {
     const target = model.byId.get(link.spanId);
     lines.push(
-      childPrefix +
-        dim(
-          options,
-          `  → links ${target?.name ?? "span"} ${link.spanId.slice(0, 8)}`,
-        ),
+      childPrefix + dim(options, `  → links ${target?.name ?? "span"} ${link.spanId.slice(0, 8)}`),
     );
   }
   // Events and children share one timeline.
   const items: Array<TimelineItem> = [
-    ...(options.events ? collapseEvents(span.events) : []).map(
-      (run): TimelineItem => ({ atMs: run.firstMs, _tag: "Events", run }),
-    ),
+    ...(options.events ? collapseEvents(span.events) : []).map((run): TimelineItem => ({
+      atMs: run.firstMs,
+      _tag: "Events",
+      run,
+    })),
     ...(model.childrenOf.get(span.spanId) ?? []).map((child): TimelineItem => ({
       atMs: child.startMs,
       _tag: "Child",
@@ -181,9 +159,7 @@ const renderSpanTree = (
     const { run } = item;
     const offset = `+${formatTraceMillis(run.firstMs - span.startMs)}`;
     const repeat =
-      run.count > 1
-        ? ` ×${run.count} (to +${formatTraceMillis(run.lastMs - span.startMs)})`
-        : "";
+      run.count > 1 ? ` ×${run.count} (to +${formatTraceMillis(run.lastMs - span.startMs)})` : "";
     lines.push(
       branch +
         dim(options, `· ${offset} `) +
@@ -213,9 +189,7 @@ export const renderTraceTrees = (
     .join("\n");
 
 /** Right-align every column but the first. */
-export const renderTraceTable = (
-  rows: ReadonlyArray<ReadonlyArray<string>>,
-): string => {
+export const renderTraceTable = (rows: ReadonlyArray<ReadonlyArray<string>>): string => {
   const widths = (rows[0] ?? []).map((_, column) =>
     Math.max(...rows.map((row) => (row[column] ?? "").length)),
   );
@@ -223,9 +197,7 @@ export const renderTraceTable = (
     .map((row) =>
       row
         .map((cell, column) =>
-          column === 0
-            ? cell.padEnd(widths[column] ?? 0)
-            : cell.padStart(widths[column] ?? 0),
+          column === 0 ? cell.padEnd(widths[column] ?? 0) : cell.padStart(widths[column] ?? 0),
         )
         .join("  "),
     )
@@ -242,10 +214,7 @@ export const formatTraceRecordLine = (
   options: { readonly color: boolean },
 ): string => {
   const indent = "  ".repeat(depth);
-  const time = dim(
-    options,
-    new Date(record.timeMs).toISOString().slice(11, 23),
-  );
+  const time = dim(options, new Date(record.timeMs).toISOString().slice(11, 23));
   switch (record.kind) {
     case "start":
       return `${time} ${indent}▶ ${record.name}`;

@@ -47,8 +47,7 @@ export function rewriteOverflowMessage<
 >(message: M, ctxProvider?: string): { message: M } | undefined {
   if (message.role !== "assistant") return undefined;
   if (message.stopReason !== "error") return undefined;
-  if (message.provider !== "pi-claude-cli" && ctxProvider !== "pi-claude-cli")
-    return undefined;
+  if (message.provider !== "pi-claude-cli" && ctxProvider !== "pi-claude-cli") return undefined;
 
   const errorMessage = message.errorMessage ?? "";
   if (!isOverflowError(errorMessage)) return undefined;

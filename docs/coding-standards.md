@@ -64,8 +64,7 @@ const EnvironmentName = Schema.String.check(
 ).pipe(Schema.brand("EnvironmentName"));
 const decodeEnvironmentName = Schema.decodeEffect(EnvironmentName);
 
-export const parseEnvironmentName = (input: string) =>
-  decodeEnvironmentName(input);
+export const parseEnvironmentName = (input: string) => decodeEnvironmentName(input);
 ```
 
 `Schema.decodeEffect` accepts the codec's `Encoded` type, not any value that happens to be known. A
@@ -95,9 +94,7 @@ implementation could inspect:
 
 ```ts
 // Wrong: discards the library's established operation contract.
-const transformOperation = (
-  value: Record<string, unknown>,
-): Record<string, unknown> => {
+const transformOperation = (value: Record<string, unknown>): Record<string, unknown> => {
   // ...
 };
 
@@ -402,10 +399,8 @@ const registerAccount = Effect.fn("AccountRegistry.registerAccount")(
   },
   Effect.catchTags({
     RegisterAccountError: (error) => Effect.fail(error),
-    SchemaError: () =>
-      Effect.fail(new RegisterAccountError({ reason: "StoredDataInvalid" })),
-    HttpClientError: () =>
-      Effect.fail(new RegisterAccountError({ reason: "PersistenceFailed" })),
+    SchemaError: () => Effect.fail(new RegisterAccountError({ reason: "StoredDataInvalid" })),
+    HttpClientError: () => Effect.fail(new RegisterAccountError({ reason: "PersistenceFailed" })),
   }),
 );
 ```
@@ -471,10 +466,7 @@ export const makeIssueService = Effect.gen(function* () {
   return IssueService.of({/* operations */});
 });
 
-export const issueServiceLayerWithoutDependencies = Layer.effect(
-  IssueService,
-  makeIssueService,
-);
+export const issueServiceLayerWithoutDependencies = Layer.effect(IssueService, makeIssueService);
 
 // Runtime modules import the Layer and yield IssueService. They never import makeIssueService.
 ```
@@ -518,10 +510,9 @@ export interface IIssueService {
 }
 
 /** Provides the contextual Issue service capability. */
-export class IssueService extends Context.Service<
-  IssueService,
-  IIssueService
->()("@app/IssueService") {}
+export class IssueService extends Context.Service<IssueService, IIssueService>()(
+  "@app/IssueService",
+) {}
 
 /** Constructs the Issue service while preserving its dependency requirements. */
 export const makeIssueService = Effect.gen(function* () {
@@ -535,10 +526,7 @@ export const makeIssueService = Effect.gen(function* () {
 });
 
 /** Provides the Issue service without selecting dependency implementations. */
-export const issueServiceLayerWithoutDependencies = Layer.effect(
-  IssueService,
-  makeIssueService,
-);
+export const issueServiceLayerWithoutDependencies = Layer.effect(IssueService, makeIssueService);
 
 /** Provides the Issue service with its production dependencies. */
 export const issueServiceLayer = issueServiceLayerWithoutDependencies.pipe(
@@ -580,9 +568,7 @@ Attach `/** ... */` JSDoc directly to its declaration. Include tags when they ad
  * @param input - Raw input received from outside the application.
  * @returns A validated email address, or `InvalidEmailAddress` when validation fails.
  */
-export function parseEmailAddress(
-  input: string,
-): Result<EmailAddress, InvalidEmailAddress>;
+export function parseEmailAddress(input: string): Result<EmailAddress, InvalidEmailAddress>;
 ```
 
 Add `@template` when a type parameter has a role or constraint the signature does not make clear:
@@ -595,10 +581,7 @@ Add `@template` when a type parameter has a role or constraint the signature doe
  * @param fn - Transforms the success value; it is skipped when `result` contains an error.
  * @returns A result containing the transformed success value or the original error.
  */
-export function mapResult<T, U, E>(
-  result: Result<T, E>,
-  fn: (value: T) => U,
-): Result<U, E>;
+export function mapResult<T, U, E>(result: Result<T, E>, fn: (value: T) => U): Result<U, E>;
 ```
 
 Reserve `@throws` for unrecoverable defects, framework-required behavior, and temporary `notYetImplemented` paths. Describe expected typed errors in `@returns` or the operation's documented outcomes.

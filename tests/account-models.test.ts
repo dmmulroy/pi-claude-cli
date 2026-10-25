@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { Option } from "effect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   ACCOUNT_MODELS_TTL_MILLIS,
   accountModelIds,
@@ -16,17 +16,10 @@ import {
   providerModelsForAccount,
   providerModelsFromStore,
 } from "../src/account-models";
-import {
-  accountModelsFromLine,
-  initializeRequestLine,
-  probeEnvironment,
-} from "../src/model-probe";
+import { accountModelsFromLine, initializeRequestLine, probeEnvironment } from "../src/model-probe";
 
 const cost = { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 };
-const catalogueModel = (
-  id: string,
-  overrides: Partial<CatalogueModel> = {},
-): CatalogueModel => ({
+const catalogueModel = (id: string, overrides: Partial<CatalogueModel> = {}): CatalogueModel => ({
   id,
   name: id.toUpperCase(),
   reasoning: true,
@@ -70,8 +63,7 @@ const account: CliAccountModel[] = [
   },
 ];
 
-const ids = (models: ReadonlyArray<{ id: string }> | undefined) =>
-  models?.map((model) => model.id);
+const ids = (models: ReadonlyArray<{ id: string }> | undefined) => models?.map((model) => model.id);
 
 describe("accountModelIds", () => {
   it("resolves aliases to model ids, once each, in the CLI's order", () => {
@@ -92,9 +84,7 @@ describe("accountModelIds", () => {
   });
 
   it("ignores an alias the CLI did not resolve", () => {
-    expect(accountModelIds([{ value: "opus" }, { value: "default" }])).toEqual(
-      [],
-    );
+    expect(accountModelIds([{ value: "opus" }, { value: "default" }])).toEqual([]);
   });
 });
 
@@ -118,9 +108,7 @@ describe("providerModelsForAccount", () => {
   });
 
   it("leaves out catalogue models the account does not offer", () => {
-    expect(ids(providerModelsForAccount(catalogue, account))).not.toContain(
-      "claude-opus-4-5",
-    );
+    expect(ids(providerModelsForAccount(catalogue, account))).not.toContain("claude-opus-4-5");
   });
 
   it("matches a dated snapshot in either direction", () => {
@@ -169,9 +157,7 @@ describe("providerModelsForAccount", () => {
 
   it("returns nothing for an account list that names no model", () => {
     expect(providerModelsForAccount(catalogue, [])).toBeUndefined();
-    expect(
-      providerModelsForAccount(catalogue, [{ value: "default" }]),
-    ).toBeUndefined();
+    expect(providerModelsForAccount(catalogue, [{ value: "default" }])).toBeUndefined();
   });
 
   it("covers the real catalogue: every account model there is found", () => {
@@ -211,9 +197,9 @@ describe("providerModelsFromStore", () => {
 
   it("keeps a stored model the catalogue does not list, when complete", () => {
     const unknown = catalogueModel("claude-nova-9");
-    expect(
-      ids(providerModelsFromStore(catalogue, { models: [unknown] })),
-    ).toEqual(["claude-nova-9"]);
+    expect(ids(providerModelsFromStore(catalogue, { models: [unknown] }))).toEqual([
+      "claude-nova-9",
+    ]);
   });
 
   it("drops entries that are not models", () => {
@@ -237,9 +223,7 @@ describe("isAccountModelsFresh", () => {
   const now = 1_800_000_000_000;
   it("is fresh within a day of the last check", () => {
     expect(isAccountModelsFresh({ checkedAt: now - 1000 }, now)).toBe(true);
-    expect(
-      isAccountModelsFresh({ checkedAt: now - ACCOUNT_MODELS_TTL_MILLIS }, now),
-    ).toBe(false);
+    expect(isAccountModelsFresh({ checkedAt: now - ACCOUNT_MODELS_TTL_MILLIS }, now)).toBe(false);
   });
   it("is stale without a check time, or with one from the future", () => {
     expect(isAccountModelsFresh(undefined, now)).toBe(false);
@@ -251,12 +235,8 @@ describe("isAccountModelsFresh", () => {
 describe("accountModelsEnabled", () => {
   it("is on unless PI_CLAUDE_CLI_MODELS=builtin", () => {
     expect(accountModelsEnabled({})).toBe(true);
-    expect(accountModelsEnabled({ PI_CLAUDE_CLI_MODELS: "account" })).toBe(
-      true,
-    );
-    expect(accountModelsEnabled({ PI_CLAUDE_CLI_MODELS: " Builtin " })).toBe(
-      false,
-    );
+    expect(accountModelsEnabled({ PI_CLAUDE_CLI_MODELS: "account" })).toBe(true);
+    expect(accountModelsEnabled({ PI_CLAUDE_CLI_MODELS: " Builtin " })).toBe(false);
   });
 });
 
@@ -311,7 +291,7 @@ describe("createModelRefresh", () => {
     expect(ids(models)).toEqual(accountIds);
     expect(probe.models).toHaveBeenCalledWith(ctx.signal);
     expect(ctx.publish).toHaveBeenCalledTimes(1);
-    const persist = ctx.publish.mock.calls[0]![0].persist;
+    const persist = ctx.publish.mock.calls[0][0].persist;
     expect(persist?.checkedAt).toBe(now);
     expect(persist?.etag).toBe("claude-code/2.1.299");
     expect(ids(persist?.models)).toEqual(accountIds);
@@ -325,15 +305,9 @@ describe("createModelRefresh", () => {
     const probe = cli();
     const refresh = createModelRefresh(catalogue, probe, () => now);
 
-    expect(ids(await refresh(context({ allowNetwork: false })))).toEqual(
-      builtinIds,
-    );
+    expect(ids(await refresh(context({ allowNetwork: false })))).toEqual(builtinIds);
     expect(
-      ids(
-        await refresh(
-          context({ allowNetwork: false, stored: storedEntry(now - 1) }),
-        ),
-      ),
+      ids(await refresh(context({ allowNetwork: false, stored: storedEntry(now - 1) }))),
     ).toEqual(["claude-sonnet-5"]);
     expect(probe.version).not.toHaveBeenCalled();
     expect(probe.models).not.toHaveBeenCalled();
@@ -355,19 +329,13 @@ describe("createModelRefresh", () => {
     const ctx = context({ stored: storedEntry(now - 60_000, "2.1.292") });
     await createModelRefresh(catalogue, probe, () => now)(ctx);
     expect(probe.models).toHaveBeenCalledTimes(1);
-    expect(ctx.publish.mock.calls[0]![0].persist?.etag).toBe(
-      "claude-code/2.1.299",
-    );
+    expect(ctx.publish.mock.calls[0][0].persist?.etag).toBe("claude-code/2.1.299");
   });
 
   it("asks again for a list stored without a CLI version", async () => {
     const probe = cli();
     const { etag: _, ...unversioned } = storedEntry(now - 60_000);
-    await createModelRefresh(
-      catalogue,
-      probe,
-      () => now,
-    )(context({ stored: unversioned }));
+    await createModelRefresh(catalogue, probe, () => now)(context({ stored: unversioned }));
     expect(probe.models).toHaveBeenCalledTimes(1);
   });
 
@@ -375,9 +343,7 @@ describe("createModelRefresh", () => {
     const probe = cli();
     const refresh = createModelRefresh(catalogue, probe, () => now);
 
-    await refresh(
-      context({ stored: storedEntry(now - ACCOUNT_MODELS_TTL_MILLIS - 1) }),
-    );
+    await refresh(context({ stored: storedEntry(now - ACCOUNT_MODELS_TTL_MILLIS - 1) }));
     await refresh(context({ stored: storedEntry(now - 1), force: true }));
     expect(probe.models).toHaveBeenCalledTimes(2);
   });
@@ -450,19 +416,12 @@ describe("the model probe's protocol", () => {
   });
 
   it("ignores every other line", () => {
-    const other = (response: object) =>
-      JSON.stringify({ type: "control_response", response });
+    const other = (response: object) => JSON.stringify({ type: "control_response", response });
     expect(Option.isNone(accountModelsFromLine("not json"))).toBe(true);
+    expect(Option.isNone(accountModelsFromLine('{"type":"system","subtype":"init"}'))).toBe(true);
     expect(
       Option.isNone(
-        accountModelsFromLine('{"type":"system","subtype":"init"}'),
-      ),
-    ).toBe(true);
-    expect(
-      Option.isNone(
-        accountModelsFromLine(
-          other({ subtype: "success", request_id: "someone-else" }),
-        ),
+        accountModelsFromLine(other({ subtype: "success", request_id: "someone-else" })),
       ),
     ).toBe(true);
   });
@@ -482,11 +441,7 @@ describe("the model probe's protocol", () => {
 
   it("keeps the subscription login and leaves feature flags on", () => {
     const env = probeEnvironment();
-    for (const name of [
-      "ANTHROPIC_API_KEY",
-      "ANTHROPIC_AUTH_TOKEN",
-      "ANTHROPIC_BASE_URL",
-    ]) {
+    for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"]) {
       expect(name in env).toBe(true);
       expect(env[name]).toBeUndefined();
     }

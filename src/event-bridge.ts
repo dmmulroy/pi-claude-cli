@@ -95,10 +95,7 @@ export interface EventBridge {
    * The CLI's own record of blocks of an API message (an `assistant`
    * envelope), kept to check the stream against (`streamMismatch`).
    */
-  recordAssistantBlocks(
-    messageId: string,
-    content: ReadonlyArray<ClaudeAssistantBlock>,
-  ): void;
+  recordAssistantBlocks(messageId: string, content: ReadonlyArray<ClaudeAssistantBlock>): void;
   /**
    * How the current API message as streamed differs from the CLI's record
    * of it, or undefined when it does not (or there is no record). Asked at
@@ -156,9 +153,7 @@ export function mapStopReason(
       return {
         stopReason: "error",
         errorMessage:
-          explanation !== undefined &&
-          explanation !== null &&
-          explanation.length > 0
+          explanation !== undefined && explanation !== null && explanation.length > 0
             ? explanation
             : "The model refused to complete the request",
       };
@@ -194,11 +189,7 @@ const hasVisibleText = (text: string): boolean => text.trim().length > 0;
 function rateLimitDetails(info: ClaudeRateLimitInfo): JsonObject {
   const details: JsonObject = {};
   for (const [key, value] of Object.entries(info))
-    if (
-      typeof value === "string" ||
-      typeof value === "number" ||
-      typeof value === "boolean"
-    )
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
       details[key] = value;
   return details;
 }
@@ -353,16 +344,12 @@ export function createEventBridge(
   }
 
   function recomputeUsage(): void {
-    output.usage.input =
-      cumulativeUsage.input_tokens + (cycleUsage.input_tokens ?? 0);
-    output.usage.output =
-      cumulativeUsage.output_tokens + (cycleUsage.output_tokens ?? 0);
+    output.usage.input = cumulativeUsage.input_tokens + (cycleUsage.input_tokens ?? 0);
+    output.usage.output = cumulativeUsage.output_tokens + (cycleUsage.output_tokens ?? 0);
     output.usage.cacheRead =
-      cumulativeUsage.cache_read_input_tokens +
-      (cycleUsage.cache_read_input_tokens ?? 0);
+      cumulativeUsage.cache_read_input_tokens + (cycleUsage.cache_read_input_tokens ?? 0);
     output.usage.cacheWrite =
-      cumulativeUsage.cache_creation_input_tokens +
-      (cycleUsage.cache_creation_input_tokens ?? 0);
+      cumulativeUsage.cache_creation_input_tokens + (cycleUsage.cache_creation_input_tokens ?? 0);
     // Latch the newest cycle we have numbers for. `applyResult` clears
     // cycleUsage, so a zero here means "no fresher figure", never "empty
     // context" — the last latched value must survive.
@@ -378,13 +365,9 @@ export function createEventBridge(
     // Subsets of the totals above, never more than them.
     const cacheWrite1h = plus(bankedCacheWrite1h, cycleCacheWrite1h);
     if (cacheWrite1h !== undefined)
-      output.usage.cacheWrite1h = Math.min(
-        cacheWrite1h,
-        output.usage.cacheWrite,
-      );
+      output.usage.cacheWrite1h = Math.min(cacheWrite1h, output.usage.cacheWrite);
     const reasoning = plus(bankedReasoning, cycleReasoning);
-    if (reasoning !== undefined)
-      output.usage.reasoning = Math.min(reasoning, output.usage.output);
+    if (reasoning !== undefined) output.usage.reasoning = Math.min(reasoning, output.usage.output);
     calculateCost(model, output.usage);
   }
 
@@ -418,10 +401,7 @@ export function createEventBridge(
   }
 
   /** Show the arguments parsed so far on the streaming partial. */
-  function setToolCallArguments(
-    contentIndex: number,
-    args: ToolCall["arguments"],
-  ): void {
+  function setToolCallArguments(contentIndex: number, args: ToolCall["arguments"]): void {
     const content = output.content[contentIndex];
     if (content?.type === "toolCall") content.arguments = args;
   }
@@ -438,10 +418,8 @@ export function createEventBridge(
         // New cycle: bank the finished cycle's usage before resetting.
         cumulativeUsage.input_tokens += cycleUsage.input_tokens ?? 0;
         cumulativeUsage.output_tokens += cycleUsage.output_tokens ?? 0;
-        cumulativeUsage.cache_read_input_tokens +=
-          cycleUsage.cache_read_input_tokens ?? 0;
-        cumulativeUsage.cache_creation_input_tokens +=
-          cycleUsage.cache_creation_input_tokens ?? 0;
+        cumulativeUsage.cache_read_input_tokens += cycleUsage.cache_read_input_tokens ?? 0;
+        cumulativeUsage.cache_creation_input_tokens += cycleUsage.cache_creation_input_tokens ?? 0;
         cycleUsage = {};
         bankedCacheWrite1h = plus(bankedCacheWrite1h, cycleCacheWrite1h);
         cycleCacheWrite1h = undefined;
@@ -481,8 +459,7 @@ export function createEventBridge(
     const usage = event.message?.usage;
     if (usage) {
       cycleUsage = presentCounters(usage);
-      cycleCacheWrite1h =
-        usage.cache_creation?.ephemeral_1h_input_tokens ?? undefined;
+      cycleCacheWrite1h = usage.cache_creation?.ephemeral_1h_input_tokens ?? undefined;
       recomputeUsage();
     }
   }
@@ -562,7 +539,7 @@ export function createEventBridge(
         id,
         name: piName,
         arguments: {},
-      } as ToolCall);
+      });
 
       stream.push({
         type: "toolcall_start",
@@ -575,9 +552,7 @@ export function createEventBridge(
 
   /** Locate the tracked block for this cycle's SSE index. */
   function trackedFor(event: ClaudeApiEvent): TrackedBlock | undefined {
-    const idx = blocks.findIndex(
-      (b) => b.cycle === cycle && b.index === event.index,
-    );
+    const idx = blocks.findIndex((b) => b.cycle === cycle && b.index === event.index);
     return idx === -1 ? undefined : blocks[idx];
   }
 
@@ -616,10 +591,7 @@ export function createEventBridge(
         delta: event.delta!.text,
         partial: output,
       });
-    } else if (
-      deltaType === "thinking_delta" &&
-      event.delta!.thinking != null
-    ) {
+    } else if (deltaType === "thinking_delta" && event.delta!.thinking != null) {
       if (block.type !== "thinking") return;
       // Empty thinking_delta events accompany encrypted thinking (verified
       // on sonnet-5): they carry no plaintext, so they must not bring a
@@ -629,18 +601,14 @@ export function createEventBridge(
         materializeThinking(block);
       }
       block.text += event.delta!.thinking;
-      (output.content[block.contentIndex] as ThinkingContent).thinking =
-        block.text;
+      (output.content[block.contentIndex] as ThinkingContent).thinking = block.text;
       stream.push({
         type: "thinking_delta",
         contentIndex: block.contentIndex,
         delta: event.delta!.thinking,
         partial: output,
       });
-    } else if (
-      deltaType === "input_json_delta" &&
-      event.delta!.partial_json != null
-    ) {
+    } else if (deltaType === "input_json_delta" && event.delta!.partial_json != null) {
       if (block.type !== "tool_use") return;
       block.partialJson += event.delta!.partial_json;
       try {
@@ -661,40 +629,28 @@ export function createEventBridge(
         delta: event.delta!.partial_json,
         partial: output,
       });
-    } else if (
-      deltaType === "signature_delta" &&
-      event.delta!.signature != null
-    ) {
+    } else if (deltaType === "signature_delta" && event.delta!.signature != null) {
       if (block.type !== "thinking") return;
       block.signature = (block.signature ?? "") + event.delta!.signature;
       if (block.contentIndex === -1) {
         // Signature before (or without) any plaintext: hold it in case
         // plaintext follows. If it never does, the block is dropped.
-        block.pendingSignature =
-          (block.pendingSignature ?? "") + event.delta!.signature;
+        block.pendingSignature = (block.pendingSignature ?? "") + event.delta!.signature;
         return;
       }
-      const contentBlock = output.content[
-        block.contentIndex
-      ] as ThinkingContent;
+      const contentBlock = output.content[block.contentIndex] as ThinkingContent;
       contentBlock.thinkingSignature =
         (contentBlock.thinkingSignature || "") + event.delta!.signature;
     }
   }
 
   function handleContentBlockStop(event: ClaudeApiEvent): void {
-    const idx = blocks.findIndex(
-      (b) => b.cycle === cycle && b.index === event.index,
-    );
+    const idx = blocks.findIndex((b) => b.cycle === cycle && b.index === event.index);
     if (idx === -1) return;
     const block = blocks[idx];
 
     // The raw block is kept whether or not pi has anything to show for it.
-    if (
-      block.type === "thinking" &&
-      block.signature !== undefined &&
-      block.signature.length > 0
-    )
+    if (block.type === "thinking" && block.signature !== undefined && block.signature.length > 0)
       signedBlocks.push({
         at: block.at ?? 0,
         block: {
@@ -781,14 +737,10 @@ export function createEventBridge(
   function handleMessageDelta(event: ClaudeApiEvent): void {
     if (event.delta?.stop_reason) {
       // The LAST cycle's stop reason is the episode's stop reason.
-      const mapped = mapStopReason(
-        event.delta.stop_reason,
-        event.delta.stop_details?.explanation,
-      );
+      const mapped = mapStopReason(event.delta.stop_reason, event.delta.stop_details?.explanation);
       output.rawStopReason = event.delta.stop_reason;
       output.stopReason = mapped.stopReason;
-      if (mapped.errorMessage !== undefined)
-        output.errorMessage = mapped.errorMessage;
+      if (mapped.errorMessage !== undefined) output.errorMessage = mapped.errorMessage;
       else delete output.errorMessage;
     }
 
@@ -796,15 +748,12 @@ export function createEventBridge(
     if (usage) {
       // message_delta carries the cycle's final numbers — overwrite within
       // the cycle, never across cycles (those are banked at message_start).
-      if (usage.input_tokens != null)
-        cycleUsage.input_tokens = usage.input_tokens;
-      if (usage.output_tokens != null)
-        cycleUsage.output_tokens = usage.output_tokens;
+      if (usage.input_tokens != null) cycleUsage.input_tokens = usage.input_tokens;
+      if (usage.output_tokens != null) cycleUsage.output_tokens = usage.output_tokens;
       if (usage.cache_read_input_tokens != null)
         cycleUsage.cache_read_input_tokens = usage.cache_read_input_tokens;
       if (usage.cache_creation_input_tokens != null)
-        cycleUsage.cache_creation_input_tokens =
-          usage.cache_creation_input_tokens;
+        cycleUsage.cache_creation_input_tokens = usage.cache_creation_input_tokens;
       if (usage.cache_creation?.ephemeral_1h_input_tokens != null)
         cycleCacheWrite1h = usage.cache_creation.ephemeral_1h_input_tokens;
       if (usage.output_tokens_details?.thinking_tokens != null)
@@ -832,16 +781,12 @@ export function createEventBridge(
     // cache-write), which is why it is trusted here.
     const totals = sumModelUsage(result.modelUsage) ?? result.usage;
     if (totals) {
-      cumulativeUsage.input_tokens =
-        totals.input_tokens ?? cumulativeUsage.input_tokens;
-      cumulativeUsage.output_tokens =
-        totals.output_tokens ?? cumulativeUsage.output_tokens;
+      cumulativeUsage.input_tokens = totals.input_tokens ?? cumulativeUsage.input_tokens;
+      cumulativeUsage.output_tokens = totals.output_tokens ?? cumulativeUsage.output_tokens;
       cumulativeUsage.cache_read_input_tokens =
-        totals.cache_read_input_tokens ??
-        cumulativeUsage.cache_read_input_tokens;
+        totals.cache_read_input_tokens ?? cumulativeUsage.cache_read_input_tokens;
       cumulativeUsage.cache_creation_input_tokens =
-        totals.cache_creation_input_tokens ??
-        cumulativeUsage.cache_creation_input_tokens;
+        totals.cache_creation_input_tokens ?? cumulativeUsage.cache_creation_input_tokens;
       cycleUsage = {};
       recomputeUsage();
     }
@@ -885,8 +830,7 @@ export function createEventBridge(
     const streamed = blocks.filter(
       (block) =>
         block.cycle === cycle &&
-        ((block.type === "text" && hasVisibleText(block.text)) ||
-          block.type === "tool_use"),
+        ((block.type === "text" && hasVisibleText(block.text)) || block.type === "tool_use"),
     );
     // The record may trail the stream, never the other way round.
     if (recorded.length > streamed.length)
@@ -895,10 +839,7 @@ export function createEventBridge(
       const actual = streamed[position];
       const differs = `block ${position + 1} (${expected.type}) of the stream differs from the Claude CLI's record of it`;
       if (expected.type === "text") {
-        if (
-          actual?.type !== "text" ||
-          actual.text.trim() !== (expected.text ?? "").trim()
-        )
+        if (actual?.type !== "text" || actual.text.trim() !== (expected.text ?? "").trim())
           return differs;
         continue;
       }
@@ -921,19 +862,14 @@ export function createEventBridge(
     return undefined;
   }
 
-  function recordRateLimit(
-    info: ClaudeRateLimitInfo,
-    reportedAtMillis: number,
-  ): void {
+  function recordRateLimit(info: ClaudeRateLimitInfo, reportedAtMillis: number): void {
     const diagnostic: AssistantMessageDiagnostic = {
       type: RATE_LIMIT_DIAGNOSTIC,
       timestamp: reportedAtMillis,
       details: rateLimitDetails(info),
     };
     output.diagnostics = [
-      ...(output.diagnostics ?? []).filter(
-        (entry) => entry.type !== RATE_LIMIT_DIAGNOSTIC,
-      ),
+      ...(output.diagnostics ?? []).filter((entry) => entry.type !== RATE_LIMIT_DIAGNOSTIC),
       diagnostic,
     ];
   }

@@ -71,33 +71,26 @@ if (args[0] === "auth" && args[1] === "status") {
 const emit = (obj) => process.stdout.write(JSON.stringify(obj) + "\n");
 
 if (process.env.CLAUDE_STUB_ARGV_FILE) {
-  fs.appendFileSync(
-    process.env.CLAUDE_STUB_ARGV_FILE,
-    JSON.stringify(args) + "\n",
-  );
+  fs.appendFileSync(process.env.CLAUDE_STUB_ARGV_FILE, JSON.stringify(args) + "\n");
 }
 if (process.env.CLAUDE_STUB_ENV_FILE) {
   fs.writeFileSync(
     process.env.CLAUDE_STUB_ENV_FILE,
     JSON.stringify({
-      anthropic: Object.keys(process.env).filter((key) =>
-        key.startsWith("ANTHROPIC_"),
-      ),
+      anthropic: Object.keys(process.env).filter((key) => key.startsWith("ANTHROPIC_")),
       mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null,
       disableAutoCompact: process.env.DISABLE_AUTO_COMPACT ?? null,
       disableCompact: process.env.DISABLE_COMPACT ?? null,
       maxRetries: process.env.CLAUDE_CODE_MAX_RETRIES ?? null,
       retryWatchdog: process.env.CLAUDE_CODE_RETRY_WATCHDOG ?? null,
-      disableNonessentialTraffic:
-        process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ?? null,
+      disableNonessentialTraffic: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ?? null,
       disableClaudeMds: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS ?? null,
       secureStorageDir: process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? null,
       providerSwitches: Object.keys(process.env).filter((key) =>
         key.startsWith("CLAUDE_CODE_USE_"),
       ),
       extraBody: process.env.CLAUDE_CODE_EXTRA_BODY ?? null,
-      totalTokensReminder:
-        process.env.CLAUDE_CODE_TOTAL_TOKENS_REMINDER ?? null,
+      totalTokensReminder: process.env.CLAUDE_CODE_TOTAL_TOKENS_REMINDER ?? null,
     }),
   );
 }
@@ -159,9 +152,7 @@ const listTools = async () => {
   if (process.env.CLAUDE_STUB_TOOLS_FILE) {
     fs.appendFileSync(
       process.env.CLAUDE_STUB_TOOLS_FILE,
-      JSON.stringify(
-        (listed.response?.result?.tools ?? []).map((tool) => tool.name),
-      ) + "\n",
+      JSON.stringify((listed.response?.result?.tools ?? []).map((tool) => tool.name)) + "\n",
     );
   }
 };
@@ -270,8 +261,7 @@ const cycle = (text) => {
   messageEnd("end_turn");
 };
 
-const success = () =>
-  emit({ type: "result", subtype: "success", is_error: false });
+const success = () => emit({ type: "result", subtype: "success", is_error: false });
 
 let turnActive = false;
 let toolSeq = 0;
@@ -314,9 +304,7 @@ const toolTurn = async (piToolNames) => {
   }
 
   const interrupted = new Promise((_, reject) => (interruptTurn = reject));
-  const permissions = Promise.all(
-    uses.map((use) => askPermission(use.name, use.toolUseId, input)),
-  );
+  const permissions = Promise.all(uses.map((use) => askPermission(use.name, use.toolUseId, input)));
   messageEnd("tool_use");
   const decisions = await Promise.race([permissions, interrupted]);
   if (decisions.some((decision) => decision?.behavior !== "allow")) {
@@ -338,9 +326,7 @@ const toolTurn = async (piToolNames) => {
   const answers = await Promise.race([calls, interrupted]);
   const text = answers
     .map((answer) =>
-      (answer.response?.result?.content ?? [])
-        .map((block) => block.text ?? "")
-        .join(""),
+      (answer.response?.result?.content ?? []).map((block) => block.text ?? "").join(""),
     )
     .join("|");
   emit({ type: "user", message: { role: "user", content: [] } });
@@ -396,7 +382,7 @@ const startTurn = (text) => {
     // Alive, but with nothing for pi's stream: only control traffic.
     let pings = 0;
     const ping = () => {
-      mcp("ping");
+      void mcp("ping");
       if (++pings < 6) return setTimeout(ping, 100);
       cycle("PORT-OK");
       turnActive = false;
@@ -457,9 +443,7 @@ const userText = (message) => {
   const content = message?.message?.content;
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
-  const texts = content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text);
+  const texts = content.filter((block) => block.type === "text").map((block) => block.text);
   return texts[texts.length - 1] ?? "";
 };
 
@@ -526,7 +510,7 @@ const handleLine = (line) => {
         msg.request.message?.method === "notifications/tools/list_changed" &&
         process.env.CLAUDE_STUB_IGNORE_TOOLS_CHANGED !== "1"
       )
-        listTools();
+        void listTools();
       return;
     }
     // Thinking changes on a live process: acknowledge, as the CLI does.
@@ -564,7 +548,7 @@ const handleLine = (line) => {
   ) {
     // Held: added to the conversation without a model call, then confirmed
     // with an empty result, as Claude Code 2.1.292 does.
-    mcpReady.then(() => {
+    void mcpReady.then(() => {
       emit({ type: "system", subtype: "init", session_id: "stub-session" });
       emit({
         type: "result",
@@ -575,7 +559,7 @@ const handleLine = (line) => {
     });
     return;
   }
-  if (msg.type === "user") mcpReady.then(() => startTurn(userText(msg)));
+  if (msg.type === "user") void mcpReady.then(() => startTurn(userText(msg)));
 };
 
 let buf = "";
@@ -592,7 +576,6 @@ process.stdin.on("data", (chunk) => {
 // Like the real CLI, a closed stdin does not stop a turn in progress: the
 // process exits once it is idle.
 process.stdin.on("end", () => {
-  const exitWhenIdle = () =>
-    turnActive ? setTimeout(exitWhenIdle, 50) : process.exit(0);
+  const exitWhenIdle = () => (turnActive ? setTimeout(exitWhenIdle, 50) : process.exit(0));
   exitWhenIdle();
 });

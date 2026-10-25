@@ -1,5 +1,5 @@
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("@earendil-works/pi-ai", () => ({ calculateCost: vi.fn() }));
 
@@ -27,10 +27,7 @@ const usage = {
 };
 
 /** Run stream events through the bridge and return pi's finished message. */
-function bridged(
-  events: ReadonlyArray<ClaudeApiEvent>,
-  modelId = MODEL,
-): AssistantMessage {
+function bridged(events: ReadonlyArray<ClaudeApiEvent>, modelId = MODEL): AssistantMessage {
   const stream = { push: vi.fn(), end: vi.fn() };
   const model = {
     id: modelId,
@@ -46,8 +43,7 @@ const start = (index: number, content_block: ClaudeApiEvent["content_block"]) =>
   ({ type: "content_block_start", index, content_block }) as const;
 const delta = (index: number, value: NonNullable<ClaudeApiEvent["delta"]>) =>
   ({ type: "content_block_delta", index, delta: value }) as const;
-const stop = (index: number) =>
-  ({ type: "content_block_stop", index }) as const;
+const stop = (index: number) => ({ type: "content_block_stop", index }) as const;
 const messageStart = { type: "message_start", message: { usage: {} } } as const;
 
 /** thinking (signed, with a summary), text, and one tool call. */
@@ -91,9 +87,7 @@ const toolResult = (toolCallId: string, text: string): Message => ({
 const persisted = <T>(message: T): T => JSON.parse(JSON.stringify(message));
 
 const assistantFrame = (messages: ReadonlyArray<Message>, modelId = MODEL) =>
-  structuredReplay(messages, modelId)?.find(
-    (frame) => frame.kind === "assistant",
-  )?.content;
+  structuredReplay(messages, modelId)?.find((frame) => frame.kind === "assistant")?.content;
 
 describe("capturing signed thinking", () => {
   it("stores the raw block, its position, the model and a fingerprint", () => {
@@ -113,11 +107,7 @@ describe("capturing signed thinking", () => {
       ],
     });
     // pi's own content is what it always was.
-    expect(message.content.map((block) => block.type)).toEqual([
-      "thinking",
-      "text",
-      "toolCall",
-    ]);
+    expect(message.content.map((block) => block.type)).toEqual(["thinking", "text", "toolCall"]);
   });
 
   it("keeps the metadata under one namespaced key that survives JSON", () => {
@@ -260,9 +250,7 @@ describe("replaying signed thinking", () => {
     expect(replayableSignedThinking(later, MODEL)).toBeDefined();
   });
 
-  const edits: Array<
-    [string, (message: AssistantMessage) => AssistantMessage]
-  > = [
+  const edits: Array<[string, (message: AssistantMessage) => AssistantMessage]> = [
     [
       "edited text",
       (message) => ({
@@ -277,9 +265,7 @@ describe("replaying signed thinking", () => {
       (message) => ({
         ...message,
         content: message.content.map((block) =>
-          block.type === "toolCall"
-            ? { ...block, arguments: { path: "b.txt" } }
-            : block,
+          block.type === "toolCall" ? { ...block, arguments: { path: "b.txt" } } : block,
         ),
       }),
     ],
@@ -366,17 +352,13 @@ describe("readSignedThinking", () => {
   const valid: SignedThinking = {
     model: MODEL,
     fingerprint: "f",
-    blocks: [
-      { at: 0, block: { type: "thinking", thinking: "t", signature: "s" } },
-    ],
+    blocks: [{ at: 0, block: { type: "thinking", thinking: "t", signature: "s" } }],
   };
   const withMetadata = (metadata: unknown): AssistantMessage =>
     ({ ...bridged([]), [PROVIDER_METADATA_KEY]: metadata }) as AssistantMessage;
 
   it("reads what writeSignedThinking wrote", () => {
-    expect(readSignedThinking(withMetadata({ signedThinking: valid }))).toEqual(
-      valid,
-    );
+    expect(readSignedThinking(withMetadata({ signedThinking: valid }))).toEqual(valid);
   });
 
   it.each([
@@ -386,10 +368,7 @@ describe("readSignedThinking", () => {
     ["no blocks", { signedThinking: { ...valid, blocks: [] } }],
     ["a missing model", { signedThinking: { ...valid, model: undefined } }],
     ["a missing fingerprint", { signedThinking: { ...valid, fingerprint: 1 } }],
-    [
-      "blocks that are not a list",
-      { signedThinking: { ...valid, blocks: {} } },
-    ],
+    ["blocks that are not a list", { signedThinking: { ...valid, blocks: {} } }],
     [
       "a block without a signature",
       {
@@ -404,9 +383,7 @@ describe("readSignedThinking", () => {
       {
         signedThinking: {
           ...valid,
-          blocks: [
-            { at: 0, block: { type: "thinking", thinking: "", signature: "" } },
-          ],
+          blocks: [{ at: 0, block: { type: "thinking", thinking: "", signature: "" } }],
         },
       },
     ],
@@ -424,14 +401,11 @@ describe("readSignedThinking", () => {
       {
         signedThinking: {
           ...valid,
-          blocks: [{ at: -1, block: valid.blocks[0]!.block }],
+          blocks: [{ at: -1, block: valid.blocks[0].block }],
         },
       },
     ],
-    [
-      "an entry that is not an object",
-      { signedThinking: { ...valid, blocks: [1] } },
-    ],
+    ["an entry that is not an object", { signedThinking: { ...valid, blocks: [1] } }],
   ])("reads %s as nothing stored", (_, metadata) => {
     expect(readSignedThinking(withMetadata(metadata))).toBeUndefined();
   });

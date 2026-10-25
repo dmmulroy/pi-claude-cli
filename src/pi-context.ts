@@ -51,9 +51,7 @@ export function historyHash(messages: ReadonlyArray<Message>): string {
         ? m.content
         : m.content
             .filter((b) => b.type !== "thinking")
-            .map((b) =>
-              b.type === "text" ? { type: b.type, text: b.text } : b,
-            ),
+            .map((b) => (b.type === "text" ? { type: b.type, text: b.text } : b)),
     ...(m.role === "toolResult"
       ? { toolCallId: m.toolCallId, toolName: m.toolName, isError: m.isError }
       : {}),
@@ -62,9 +60,7 @@ export function historyHash(messages: ReadonlyArray<Message>): string {
 }
 
 /** Import in order, including every image and tool result. Never replay thinking. */
-export function replayPiMessages(
-  messages: ReadonlyArray<Message>,
-): CliUserContentBlock[] {
+export function replayPiMessages(messages: ReadonlyArray<Message>): CliUserContentBlock[] {
   const blocks: CliUserContentBlock[] = [];
   for (const message of messages) {
     blocks.push({
@@ -113,9 +109,7 @@ export type CliReplayFrame =
 /** The result of a tool call pi's history holds no result for. */
 const MISSING_TOOL_RESULT_TEXT = "No result provided";
 
-const isArgumentRecord = (
-  value: unknown,
-): value is Readonly<Record<string, unknown>> =>
+const isArgumentRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Text and images of a pi message; the API rejects an empty text block. */
@@ -127,8 +121,7 @@ function textAndImageBlocks(
   const blocks: CliTextOrImageBlock[] = [];
   for (const block of content) {
     if (block.type === "text") {
-      if (block.text.length > 0)
-        blocks.push({ type: "text", text: block.text });
+      if (block.text.length > 0) blocks.push({ type: "text", text: block.text });
     } else
       blocks.push({
         type: "image",
@@ -198,8 +191,7 @@ export function structuredReplay(
   for (const message of messages) {
     if (message.role === "assistant") {
       answerMissingResults();
-      if (message.stopReason === "error" || message.stopReason === "aborted")
-        continue;
+      if (message.stopReason === "error" || message.stopReason === "aborted") continue;
       const content: CliAssistantContentBlock[] = [];
       const signed = replayableSignedThinking(message, modelId);
       /** Text and tool call blocks of the message seen so far. */
@@ -213,18 +205,13 @@ export function structuredReplay(
           // Signed blocks stand in for pi's own; without them the thinking
           // goes back as text, as pi-ai sends thinking it holds no
           // signature for.
-          if (
-            signed === undefined &&
-            block.redacted !== true &&
-            block.thinking.trim().length > 0
-          )
+          if (signed === undefined && block.redacted !== true && block.thinking.trim().length > 0)
             content.push({ type: "text", text: block.thinking });
           continue;
         }
         replaySignedAt(visible++);
         if (block.type === "text") {
-          if (block.text.length > 0)
-            content.push({ type: "text", text: block.text });
+          if (block.text.length > 0) content.push({ type: "text", text: block.text });
         } else if (block.type === "toolCall")
           content.push({
             type: "tool_use",
@@ -236,15 +223,12 @@ export function structuredReplay(
           });
       }
       // Blocks that stood after the last text or tool call, or past it.
-      for (const entry of signed?.blocks ?? [])
-        if (entry.at >= visible) content.push(entry.block);
+      for (const entry of signed?.blocks ?? []) if (entry.at >= visible) content.push(entry.block);
       if (content.length === 0) continue;
       if (frames[frames.length - 1]?.kind !== "user") return undefined;
       frames.push({ kind: "assistant", content });
       unanswered = new Set(
-        content.flatMap((block) =>
-          block.type === "tool_use" ? [block.id] : [],
-        ),
+        content.flatMap((block) => (block.type === "tool_use" ? [block.id] : [])),
       );
     } else if (message.role === "toolResult") {
       const id = ids.toClaude(message.toolCallId);

@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   CLI_AUTH_STATUS_TTL_MILLIS,
   type CliAuthStatus,
@@ -45,9 +45,9 @@ describe("parseCliAuthStatus", () => {
       ...MAX,
       subscriptionType: undefined,
     });
-    expect(
-      parseCliAuthStatus('{"loggedIn": false, "subscriptionType": "max"}'),
-    ).toEqual(LOGGED_OUT);
+    expect(parseCliAuthStatus('{"loggedIn": false, "subscriptionType": "max"}')).toEqual(
+      LOGGED_OUT,
+    );
   });
 
   it.each(["", "not json", "[]", '{"loggedIn": "yes"}'])(
@@ -73,8 +73,7 @@ describe("probeCliAuthStatus", () => {
   const pathWith = async (script?: string) => {
     const directory = await mkdtemp(join(tmpdir(), "pcc-auth-"));
     directories.push(directory);
-    if (script !== undefined)
-      await writeFile(join(directory, "claude"), script, { mode: 0o755 });
+    if (script !== undefined) await writeFile(join(directory, "claude"), script, { mode: 0o755 });
     process.env.PATH = directory;
   };
 
@@ -166,36 +165,24 @@ describe("createCliAuthStatusCache", () => {
   });
 
   it("serves a recent kept status at once and checks again in the background", async () => {
-    const store = memoryStore(
-      JSON.stringify({ ...LOGGED_OUT, checkedAt: NOW - 1000 }),
-    );
+    const store = memoryStore(JSON.stringify({ ...LOGGED_OUT, checkedAt: NOW - 1000 }));
     let answer!: (status: CliAuthStatus) => void;
-    const probe = vi.fn(
-      () => new Promise<CliAuthStatus>((resolve) => (answer = resolve)),
-    );
+    const probe = vi.fn(() => new Promise<CliAuthStatus>((resolve) => (answer = resolve)));
     const cache = createCliAuthStatusCache(probe, store, () => NOW);
     expect(await cache.status()).toEqual(LOGGED_OUT);
     expect(probe).toHaveBeenCalledTimes(1);
     answer(MAX);
-    await vi.waitFor(() =>
-      expect(JSON.parse(store.text ?? "").subscriptionType).toBe("max"),
-    );
+    await vi.waitFor(() => expect(JSON.parse(store.text ?? "").subscriptionType).toBe("max"));
     expect(await cache.status()).toEqual(MAX);
   });
 
   it.each([
-    [
-      "old",
-      JSON.stringify({ ...MAX, checkedAt: NOW - CLI_AUTH_STATUS_TTL_MILLIS }),
-    ],
+    ["old", JSON.stringify({ ...MAX, checkedAt: NOW - CLI_AUTH_STATUS_TTL_MILLIS })],
     ["from the future", JSON.stringify({ ...MAX, checkedAt: NOW + 1 })],
     ["not JSON", "{"],
     ["not an object", "[]"],
     ["incomplete", JSON.stringify({ installed: true })],
-    [
-      "of the wrong types",
-      JSON.stringify({ installed: true, loggedIn: "yes", checkedAt: NOW }),
-    ],
+    ["of the wrong types", JSON.stringify({ installed: true, loggedIn: "yes", checkedAt: NOW })],
     [
       "with a plan that is not text",
       JSON.stringify({ installed: true, subscriptionType: 1, checkedAt: NOW }),
@@ -223,9 +210,7 @@ describe("createCliAuthStatusCache", () => {
 
   it("shares one CLI launch between callers that ask at once", async () => {
     let answer!: (status: CliAuthStatus) => void;
-    const probe = vi.fn(
-      () => new Promise<CliAuthStatus>((resolve) => (answer = resolve)),
-    );
+    const probe = vi.fn(() => new Promise<CliAuthStatus>((resolve) => (answer = resolve)));
     const cache = createCliAuthStatusCache(probe, memoryStore(), () => NOW);
     const asked = [cache.status(), cache.status(), cache.refresh()];
     await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
@@ -236,9 +221,7 @@ describe("createCliAuthStatusCache", () => {
 
   it("keeps the answer of a launch whose caller aborted", async () => {
     let answer!: (status: CliAuthStatus) => void;
-    const probe = vi.fn(
-      () => new Promise<CliAuthStatus>((resolve) => (answer = resolve)),
-    );
+    const probe = vi.fn(() => new Promise<CliAuthStatus>((resolve) => (answer = resolve)));
     const cache = createCliAuthStatusCache(probe, memoryStore(), () => NOW);
     const controller = new AbortController();
     const asked = cache.status(controller.signal);
@@ -271,9 +254,10 @@ describe("providerAuthCheck", () => {
 
   it("reports another or an unknown login as configured", () => {
     for (const loggedIn of [true, undefined])
-      expect(
-        providerAuthCheck({ ...MAX, loggedIn, subscriptionType: undefined }),
-      ).toEqual({ type: "api_key", source: "Claude Code CLI" });
+      expect(providerAuthCheck({ ...MAX, loggedIn, subscriptionType: undefined })).toEqual({
+        type: "api_key",
+        source: "Claude Code CLI",
+      });
   });
 
   it("reports a missing or logged-out CLI as not configured", () => {
@@ -287,11 +271,7 @@ describe("describeCliAuthStatus", () => {
     [{ ...MAX, installed: false }, "error", "not installed"],
     [LOGGED_OUT, "error", "claude auth login"],
     [{ ...MAX, loggedIn: undefined }, "warning", "no answer"],
-    [
-      { ...MAX, subscriptionType: undefined },
-      "warning",
-      "without a Claude subscription",
-    ],
+    [{ ...MAX, subscriptionType: undefined }, "warning", "without a Claude subscription"],
     [MAX, "info", "Claude max subscription"],
   ] as const)("describes %j", (status, level, text) => {
     const described = describeCliAuthStatus(status);

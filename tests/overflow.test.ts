@@ -1,16 +1,10 @@
-import { describe, it, expect } from "vitest";
-import {
-  isOverflowError,
-  rewriteOverflowMessage,
-  OVERFLOW_PREFIX,
-} from "../src/overflow";
+import { describe, it, expect } from "vite-plus/test";
+import { isOverflowError, rewriteOverflowMessage, OVERFLOW_PREFIX } from "../src/overflow";
 
 describe("overflow error normalization (issue #4)", () => {
   describe("isOverflowError", () => {
     it("matches the Anthropic overflow phrasings", () => {
-      expect(
-        isOverflowError("prompt is too long: 214315 tokens > 200000 maximum"),
-      ).toBe(true);
+      expect(isOverflowError("prompt is too long: 214315 tokens > 200000 maximum")).toBe(true);
       expect(
         isOverflowError(
           "input length and `max_tokens` exceed context limit: 195000 + 8192 > 200000",
@@ -19,14 +13,10 @@ describe("overflow error normalization (issue #4)", () => {
     });
 
     it("never matches rate limits or transient failures", () => {
-      expect(isOverflowError("rate limit exceeded, please slow down")).toBe(
-        false,
-      );
+      expect(isOverflowError("rate limit exceeded, please slow down")).toBe(false);
       expect(isOverflowError("429 too many requests")).toBe(false);
       expect(isOverflowError("overloaded_error: try again later")).toBe(false);
-      expect(
-        isOverflowError("Claude CLI exited unexpectedly with code 1"),
-      ).toBe(false);
+      expect(isOverflowError("Claude CLI exited unexpectedly with code 1")).toBe(false);
     });
 
     it("classifies the CLI's own wording, which now reaches pi on the first failure", () => {
@@ -45,9 +35,7 @@ describe("overflow error normalization (issue #4)", () => {
     });
 
     it("is idempotent: already-rewritten messages do not match again", () => {
-      expect(
-        isOverflowError("context_length_exceeded: prompt is too long"),
-      ).toBe(false);
+      expect(isOverflowError("context_length_exceeded: prompt is too long")).toBe(false);
     });
   });
 
@@ -77,15 +65,9 @@ describe("overflow error normalization (issue #4)", () => {
     });
 
     it("ignores non-error, non-assistant, and non-overflow messages", () => {
-      expect(
-        rewriteOverflowMessage({ ...overflow, stopReason: "stop" }),
-      ).toBeUndefined();
-      expect(
-        rewriteOverflowMessage({ ...overflow, role: "user" }),
-      ).toBeUndefined();
-      expect(
-        rewriteOverflowMessage({ ...overflow, errorMessage: "rate limited" }),
-      ).toBeUndefined();
+      expect(rewriteOverflowMessage({ ...overflow, stopReason: "stop" })).toBeUndefined();
+      expect(rewriteOverflowMessage({ ...overflow, role: "user" })).toBeUndefined();
+      expect(rewriteOverflowMessage({ ...overflow, errorMessage: "rate limited" })).toBeUndefined();
     });
   });
 });

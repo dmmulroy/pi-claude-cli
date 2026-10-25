@@ -106,9 +106,7 @@ const ClaudeResultMessage = Schema.Struct({
   /** Usage of the MAIN agent for the turn. */
   usage: Schema.optional(Schema.NullOr(ClaudeUsage)),
   /** Per-model spend for the process so far, sub-agents included. */
-  modelUsage: Schema.optional(
-    Schema.NullOr(Schema.Record(Schema.String, ClaudeModelUsage)),
-  ),
+  modelUsage: Schema.optional(Schema.NullOr(Schema.Record(Schema.String, ClaudeModelUsage))),
 });
 
 /** The `result` envelope that ends a turn. */
@@ -254,16 +252,11 @@ const decodeStreamEvent = Schema.decodeUnknownOption(StreamEventBody);
 const decodeResult = Schema.decodeUnknownOption(ClaudeResultMessage);
 const decodeAssistant = Schema.decodeUnknownOption(AssistantBody);
 const decodeRateLimit = Schema.decodeUnknownOption(RateLimitBody);
-const decodeToolPermissionRequest = Schema.decodeUnknownOption(
-  ToolPermissionRequestBody,
-);
+const decodeToolPermissionRequest = Schema.decodeUnknownOption(ToolPermissionRequestBody);
 const decodeMcpRequest = Schema.decodeUnknownOption(McpRequestBody);
 const decodeControlResponse = Schema.decodeUnknownOption(ControlResponseBody);
 
-const decodeEnvelopeBody = (
-  type: string,
-  json: unknown,
-): Option.Option<CliMessage> => {
+const decodeEnvelopeBody = (type: string, json: unknown): Option.Option<CliMessage> => {
   switch (type) {
     case "stream_event":
       return Option.map(decodeStreamEvent(json), ({ event }): CliMessage => ({
@@ -374,9 +367,7 @@ export interface McpToolCall {
 }
 
 /** Read a `tools/call` request's params. Arguments stay with pi's own toolCall. */
-export const decodeMcpToolCall = (
-  params: unknown,
-): Option.Option<McpToolCall> =>
+export const decodeMcpToolCall = (params: unknown): Option.Option<McpToolCall> =>
   Option.map(decodeMcpToolCallParams(params), (decoded) => ({
     name: decoded.name,
     toolUseId: Option.fromUndefinedOr(decoded._meta?.["claudecode/toolUseId"]),
@@ -386,9 +377,7 @@ const McpCancelledParams = Schema.Struct({ requestId: JsonRpcId });
 const decodeMcpCancelledParams = Schema.decodeUnknownOption(McpCancelledParams);
 
 /** The request id a `notifications/cancelled` abandons. */
-export const decodeMcpCancelledRequestId = (
-  params: unknown,
-): Option.Option<JsonRpcId> =>
+export const decodeMcpCancelledRequestId = (params: unknown): Option.Option<JsonRpcId> =>
   Option.map(decodeMcpCancelledParams(params), (decoded) => decoded.requestId);
 
 // ---- stdin ------------------------------------------------------------------
@@ -501,10 +490,7 @@ export const toolPermissionResponseLine = (
   });
 
 /** The answer to an in-band MCP request. */
-export const mcpResponseLine = (
-  requestId: string,
-  response: McpResponse,
-): string =>
+export const mcpResponseLine = (requestId: string, response: McpResponse): string =>
   line({
     type: "control_response",
     response: {

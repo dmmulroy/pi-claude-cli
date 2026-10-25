@@ -24,11 +24,7 @@
  * default display is `omitted`.
  */
 
-import type {
-  ThinkingLevel,
-  ThinkingBudgets,
-  ThinkingLevelMap,
-} from "@earendil-works/pi-ai";
+import type { ThinkingLevel, ThinkingBudgets, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
 /** Effort levels the CLI accepts, for `--effort` and `effortLevel`. */
 export type CliEffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
@@ -78,32 +74,22 @@ const MIN_BUDGET_TOKENS = 1024;
  * `PI_CLAUDE_CLI_THINKING_DISPLAY=omitted` opts out.
  */
 export function resolveThinkingDisplay(): ThinkingDisplay {
-  return process.env.PI_CLAUDE_CLI_THINKING_DISPLAY?.trim().toLowerCase() ===
-    "omitted"
+  return process.env.PI_CLAUDE_CLI_THINKING_DISPLAY?.trim().toLowerCase() === "omitted"
     ? "omitted"
     : "summarized";
 }
 
 /** pi-ai `thinkingBudgetForLevel`: xhigh/max clamp to high, custom wins. */
-function budgetForLevel(
-  level: ThinkingLevel,
-  custom?: ThinkingBudgets,
-): number {
+function budgetForLevel(level: ThinkingLevel, custom?: ThinkingBudgets): number {
   const rung: keyof typeof PI_THINKING_BUDGETS =
-    level === "minimal" || level === "low" || level === "medium"
-      ? level
-      : "high";
+    level === "minimal" || level === "low" || level === "medium" ? level : "high";
   const chosen = custom?.[rung];
-  if (typeof chosen !== "number" || !Number.isFinite(chosen))
-    return PI_THINKING_BUDGETS[rung];
+  if (typeof chosen !== "number" || !Number.isFinite(chosen)) return PI_THINKING_BUDGETS[rung];
   return Math.max(MIN_BUDGET_TOKENS, Math.floor(chosen));
 }
 
 /** pi-ai `mapThinkingLevelToEffort`: the model's map first, then the ladder. */
-function effortForLevel(
-  level: ThinkingLevel,
-  map?: ThinkingLevelMap | null,
-): CliEffortLevel {
+function effortForLevel(level: ThinkingLevel, map?: ThinkingLevelMap | null): CliEffortLevel {
   const mapped = map?.[level];
   if (
     mapped === "low" ||
@@ -136,9 +122,7 @@ export function resolveCliThinking(
 ): CliThinking {
   if (!model.reasoning) return { kind: "default" };
   if (reasoning === undefined) {
-    return model.thinkingLevelMap?.off === null
-      ? { kind: "default" }
-      : { kind: "disabled" };
+    return model.thinkingLevelMap?.off === null ? { kind: "default" } : { kind: "disabled" };
   }
   return {
     kind: "enabled",
@@ -214,11 +198,7 @@ export function thinkingSpawnArgs(thinking: CliThinking): string[] {
 export function sameThinking(a: CliThinking, b: CliThinking): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind !== "enabled" || b.kind !== "enabled") return true;
-  return (
-    a.budgetTokens === b.budgetTokens &&
-    a.effort === b.effort &&
-    a.display === b.display
-  );
+  return a.budgetTokens === b.budgetTokens && a.effort === b.effort && a.display === b.display;
 }
 
 /** The body of one control request (`request` in the CLI's envelope). */

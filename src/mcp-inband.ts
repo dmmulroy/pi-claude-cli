@@ -9,12 +9,7 @@
  * open until pi has run the tool.
  */
 
-import type {
-  ImageContent,
-  TextContent,
-  Tool,
-  ToolResultMessage,
-} from "@earendil-works/pi-ai";
+import type { ImageContent, TextContent, Tool, ToolResultMessage } from "@earendil-works/pi-ai";
 import { Option } from "effect";
 import {
   decodeMcpCancelledRequestId,
@@ -49,9 +44,7 @@ export interface McpToolDefinition {
 }
 
 /** pi's tools for the request, with argument schemas unchanged. */
-export const mcpToolDefinitions = (
-  tools: ReadonlyArray<Tool>,
-): ReadonlyArray<McpToolDefinition> =>
+export const mcpToolDefinitions = (tools: ReadonlyArray<Tool>): ReadonlyArray<McpToolDefinition> =>
   tools.map((tool) => ({
     name: tool.name,
     description: tool.description,
@@ -77,17 +70,13 @@ export const mcpToolErrorResult = (message: string): McpToolResult => ({
   isError: true,
 });
 
-const mcpContentBlock = (
-  block: TextContent | ImageContent,
-): McpToolResult["content"][number] =>
+const mcpContentBlock = (block: TextContent | ImageContent): McpToolResult["content"][number] =>
   block.type === "text"
     ? { type: "text", text: block.text }
     : { type: "image", data: block.data, mimeType: block.mimeType };
 
 /** pi's complete tool result, errors and images included, as an MCP result. */
-export const mcpToolResultFromPi = (
-  message: ToolResultMessage,
-): McpToolResult => {
+export const mcpToolResultFromPi = (message: ToolResultMessage): McpToolResult => {
   const content = message.content.map(mcpContentBlock);
   return {
     content: content.length > 0 ? content : [{ type: "text", text: "" }],
@@ -162,13 +151,8 @@ export const mcpServerAction = (
 };
 
 /** The JSON-RPC answer to a `tools/call`. */
-export const mcpToolCallResponse = (
-  id: JsonRpcId,
-  result: McpToolResult,
-): McpResponse => ({
+export const mcpToolCallResponse = (id: JsonRpcId, result: McpToolResult): McpResponse => ({
   jsonrpc: "2.0",
   id,
-  result: result.isError
-    ? { content: result.content, isError: true }
-    : { content: result.content },
+  result: result.isError ? { content: result.content, isError: true } : { content: result.content },
 });

@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vite-plus/test";
 import { InactivityTimeout } from "../src/errors";
 
 /**
@@ -22,10 +22,7 @@ import { InactivityTimeout } from "../src/errors";
  */
 
 const repo = resolve(__dirname, "..");
-const piBinary = join(
-  repo,
-  "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
-);
+const piBinary = join(repo, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js");
 const scratch = mkdtempSync(join(tmpdir(), "pi-claude-cli-interrupt-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 

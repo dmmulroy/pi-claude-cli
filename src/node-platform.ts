@@ -13,10 +13,7 @@ import * as NodePath from "@effect/platform-node-shared/NodePath";
 import { Layer } from "effect";
 
 /** Node `FileSystem` and `Path`. */
-export const nodeFileSystemLayer = Layer.mergeAll(
-  NodeFileSystem.layer,
-  NodePath.layer,
-);
+export const nodeFileSystemLayer = Layer.mergeAll(NodeFileSystem.layer, NodePath.layer);
 
 /** Node `Crypto`: random ids. */
 export const nodeCryptoLayer = NodeCrypto.layer;

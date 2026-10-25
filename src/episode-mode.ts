@@ -77,12 +77,8 @@ export interface EpisodeRequestFacts {
 }
 
 /** Messages after the last assistant turn: what this call adds. */
-export const deltaMessages = (
-  messages: ReadonlyArray<Message>,
-): ReadonlyArray<Message> => {
-  const lastAssistant = messages.findLastIndex(
-    (message) => message.role === "assistant",
-  );
+export const deltaMessages = (messages: ReadonlyArray<Message>): ReadonlyArray<Message> => {
+  const lastAssistant = messages.findLastIndex((message) => message.role === "assistant");
   return messages.slice(lastAssistant + 1);
 };
 
@@ -91,9 +87,7 @@ export const deltaMessages = (
  * assistant turn came from another one (a model switch), so no process of
  * ours has seen that exchange.
  */
-export const latestAssistantIsForeign = (
-  messages: ReadonlyArray<Message>,
-): boolean => {
+export const latestAssistantIsForeign = (messages: ReadonlyArray<Message>): boolean => {
   const latest = messages.findLast((message) => message.role === "assistant");
   return (
     latest !== undefined &&
@@ -127,14 +121,12 @@ export const decideEpisodeMode = (
   request: EpisodeRequestFacts,
 ): EpisodeMode => {
   if (Option.isNone(parked)) return { mode: "spawn", reason: "noParked" };
-  const { signature, acknowledged, turnActive, awaitsToolResults } =
-    parked.value;
+  const { signature, acknowledged, turnActive, awaitsToolResults } = parked.value;
   const spawn = (reason: SpawnReason): EpisodeMode => ({
     mode: "spawn",
     reason,
   });
-  if (latestAssistantIsForeign(request.messages))
-    return spawn("foreignProvider");
+  if (latestAssistantIsForeign(request.messages)) return spawn("foreignProvider");
   const difference = firstSignatureDifference(signature, request.signature);
   if (Option.isSome(difference)) return spawn(`signature.${difference.value}`);
   const historyMatches = Option.exists(
@@ -155,7 +147,5 @@ export const decideEpisodeMode = (
       : spawn("handoffMismatch");
   }
   const userMessages = delta.filter((message) => message.role === "user");
-  return toolResults.length === 0 && userMessages.length > 0
-    ? { mode: "turn" }
-    : spawn("delta");
+  return toolResults.length === 0 && userMessages.length > 0 ? { mode: "turn" } : spawn("delta");
 };

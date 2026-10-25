@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 
 // Mock @earendil-works/pi-ai before importing event-bridge
 vi.mock("@earendil-works/pi-ai", () => ({
@@ -56,9 +56,7 @@ describe("createEventBridge", () => {
     const bridge = createEventBridge(stream as any, model as any);
     bridge.handleEvent({ type: "message_start", message: { usage: {} } });
 
-    expect(stream.push).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "start" }),
-    );
+    expect(stream.push).toHaveBeenCalledWith(expect.objectContaining({ type: "start" }));
   });
 
   describe("text content block streaming", () => {
@@ -515,9 +513,7 @@ describe("createEventBridge", () => {
       });
 
       // Find toolcall_end events
-      const endEvents = stream.events.filter(
-        (e: any) => e.type === "toolcall_end",
-      ) as any[];
+      const endEvents = stream.events.filter((e: any) => e.type === "toolcall_end") as any[];
       expect(endEvents).toHaveLength(2);
       expect(endEvents[0].toolCall.id).toBe("toolu_01");
       expect(endEvents[0].toolCall.name).toBe("lookup");
@@ -580,13 +576,9 @@ describe("createEventBridge", () => {
       expect((output.content[1] as any).name).toBe("lookup");
 
       // Verify contentIndex values
-      const textStart = stream.events.find(
-        (e: any) => e.type === "text_start",
-      ) as any;
+      const textStart = stream.events.find((e: any) => e.type === "text_start") as any;
       expect(textStart.contentIndex).toBe(0);
-      const toolStart = stream.events.find(
-        (e: any) => e.type === "toolcall_start",
-      ) as any;
+      const toolStart = stream.events.find((e: any) => e.type === "toolcall_start") as any;
       expect(toolStart.contentIndex).toBe(1);
     });
 
@@ -785,16 +777,12 @@ describe("createEventBridge", () => {
         bridge.handleEvent({ type: "content_block_stop", index: 0 });
         bridge.handleEvent({ type: "content_block_stop", index: 1 });
 
-        const ends = stream.events.filter(
-          (e: any) => e.type === "toolcall_end",
-        ) as any[];
+        const ends = stream.events.filter((e: any) => e.type === "toolcall_end") as any[];
         expect(ends).toHaveLength(2);
-        expect(
-          ends.find((e) => e.toolCall.id === "toolu_a").toolCall.arguments,
-        ).toEqual({});
-        expect(
-          ends.find((e) => e.toolCall.id === "toolu_b").toolCall.arguments,
-        ).toEqual({ query: "/foo.ts" });
+        expect(ends.find((e) => e.toolCall.id === "toolu_a").toolCall.arguments).toEqual({});
+        expect(ends.find((e) => e.toolCall.id === "toolu_b").toolCall.arguments).toEqual({
+          query: "/foo.ts",
+        });
       });
 
       it("shows {} on the streaming partial before any delta arrives", () => {
@@ -1226,13 +1214,9 @@ describe("createEventBridge", () => {
       expect(text.text).toBe("The answer is 42.");
 
       // Verify correct contentIndex values
-      const thinkingStart = stream.events.find(
-        (e: any) => e.type === "thinking_start",
-      ) as any;
+      const thinkingStart = stream.events.find((e: any) => e.type === "thinking_start") as any;
       expect(thinkingStart.contentIndex).toBe(0);
-      const textStart = stream.events.find(
-        (e: any) => e.type === "text_start",
-      ) as any;
+      const textStart = stream.events.find((e: any) => e.type === "text_start") as any;
       expect(textStart.contentIndex).toBe(1);
     });
   });
@@ -1392,7 +1376,7 @@ describe("createEventBridge", () => {
     it("silently ignores unknown event types (after start)", () => {
       const bridge = createBridgeWithStart();
       bridge.handleEvent({
-        type: "some_unknown_event" as any,
+        type: "some_unknown_event",
       });
       expect(stream.push).not.toHaveBeenCalled();
     });
@@ -1590,7 +1574,7 @@ describe("createEventBridge", () => {
       bridge.handleEvent({
         type: "content_block_start",
         index: 0,
-        content_block: { type: "some_new_type" as any },
+        content_block: { type: "some_new_type" },
       });
       // No event pushed and no crash
       expect(stream.push).not.toHaveBeenCalled();

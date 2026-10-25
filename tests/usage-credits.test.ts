@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
   ALLOW_USAGE_CREDITS_ENV,
   describeUsageCreditsRejection,
@@ -50,13 +50,9 @@ describe("describeUsageCreditsRejection", () => {
   });
 
   it("leaves every other error alone, and never rewrites twice", () => {
-    expect(describeUsageCreditsRejection("rate_limit_error: 429")).toBe(
-      undefined,
-    );
+    expect(describeUsageCreditsRejection("rate_limit_error: 429")).toBe(undefined);
     const once = describeUsageCreditsRejection("out of extra usage") ?? "";
     expect(describeUsageCreditsRejection(once)).toBeUndefined();
-    expect(
-      describeUsageCreditsRejection(usageCreditsChargeMessage({})),
-    ).toBeUndefined();
+    expect(describeUsageCreditsRejection(usageCreditsChargeMessage({}))).toBeUndefined();
   });
 });

@@ -60,9 +60,7 @@ export function parseCliAuthStatus(stdout: string): CliAuthStatus {
     installed: true,
     loggedIn: typeof loggedIn === "boolean" ? loggedIn : undefined,
     subscriptionType:
-      loggedIn === true && typeof plan === "string" && plan.length > 0
-        ? plan
-        : undefined,
+      loggedIn === true && typeof plan === "string" && plan.length > 0 ? plan : undefined,
   };
 }
 
@@ -74,9 +72,7 @@ export function parseCliAuthStatus(stdout: string): CliAuthStatus {
  *   that fails or times out as installed with an unknown login. Rejects only
  *   when `signal` aborts.
  */
-export function probeCliAuthStatus(
-  signal?: AbortSignal,
-): Promise<CliAuthStatus> {
+export function probeCliAuthStatus(signal?: AbortSignal): Promise<CliAuthStatus> {
   return new Promise((resolve, reject) => {
     execFile(
       "claude",
@@ -108,9 +104,7 @@ export function defaultCliAuthStatusFile(
 ): string {
   const state = env.XDG_STATE_HOME?.trim();
   return join(
-    state !== undefined && state.length > 0
-      ? state
-      : join(homedir(), ".local", "state"),
+    state !== undefined && state.length > 0 ? state : join(homedir(), ".local", "state"),
     "pi-claude-cli",
     "auth-status.json",
   );
@@ -171,18 +165,13 @@ export interface CliAuthStatusCache {
 }
 
 /** `promise`, or a rejection with the abort reason once `signal` aborts. */
-function untilAborted<A>(
-  promise: Promise<A>,
-  signal?: AbortSignal,
-): Promise<A> {
+function untilAborted<A>(promise: Promise<A>, signal?: AbortSignal): Promise<A> {
   if (signal === undefined) return promise;
   if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
-    promise
-      .then(resolve, reject)
-      .finally(() => signal.removeEventListener("abort", abort));
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
   });
 }
 
@@ -222,8 +211,7 @@ export function createCliAuthStatusCache(
   const load = async (): Promise<CliAuthStatus> => {
     const stored = readStored(await store.read());
     const age = stored === undefined ? Infinity : now() - stored.checkedAt;
-    if (stored === undefined || age < 0 || age >= CLI_AUTH_STATUS_TTL_MILLIS)
-      return probeOnce();
+    if (stored === undefined || age < 0 || age >= CLI_AUTH_STATUS_TTL_MILLIS) return probeOnce();
     current ??= {
       installed: stored.installed,
       loggedIn: stored.loggedIn,
@@ -256,9 +244,7 @@ export function createCliAuthStatusCache(
  * known to be logged out; a subscription login reports as OAuth-shaped, so
  * pi labels its list-price cost "(sub)".
  */
-export function providerAuthCheck(
-  status: CliAuthStatus,
-): AuthCheck | undefined {
+export function providerAuthCheck(status: CliAuthStatus): AuthCheck | undefined {
   if (!status.installed || status.loggedIn === false) return undefined;
   return status.subscriptionType === undefined
     ? { type: "api_key", source: "Claude Code CLI" }
@@ -279,8 +265,7 @@ export function describeCliAuthStatus(status: CliAuthStatus): {
   if (status.loggedIn === false)
     return {
       level: "error",
-      message:
-        "Claude Code is installed but not logged in. Run `claude auth login` and try again.",
+      message: "Claude Code is installed but not logged in. Run `claude auth login` and try again.",
     };
   if (status.loggedIn === undefined)
     return {

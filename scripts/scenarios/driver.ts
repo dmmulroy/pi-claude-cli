@@ -20,17 +20,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
-import {
-  Config,
-  Console,
-  Data,
-  Effect,
-  FileSystem,
-  Layer,
-  Path,
-  Ref,
-  Schema,
-} from "effect";
+import { Config, Console, Data, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
 import { Type } from "typebox";
 import type { EpisodeOptions } from "../../src/episode.ts";
 import { nodeFileSystemLayer } from "../../src/node-platform.ts";
@@ -44,14 +34,12 @@ import {
 } from "../../src/provider-runtime.ts";
 
 /** The driver saw something other than what the scenario expects. */
-class ScenarioExpectationFailed extends Data.TaggedError(
-  "ScenarioExpectationFailed",
-)<{ readonly message: string }> {}
+class ScenarioExpectationFailed extends Data.TaggedError("ScenarioExpectationFailed")<{
+  readonly message: string;
+}> {}
 
 const expect = (condition: boolean, message: string) =>
-  condition
-    ? Effect.void
-    : Effect.fail(new ScenarioExpectationFailed({ message }));
+  condition ? Effect.void : Effect.fail(new ScenarioExpectationFailed({ message }));
 
 // ---- a pi conversation -----------------------------------------------------
 
@@ -63,9 +51,7 @@ const tool = (name: string): Tool => ({
   parameters: Type.Object({ path: Type.String() }),
 });
 
-const builtinHaiku = getBuiltinModels("anthropic").find(
-  (model) => model.id === "claude-haiku-4-5",
-);
+const builtinHaiku = getBuiltinModels("anthropic").find((model) => model.id === "claude-haiku-4-5");
 
 /** The model as pi hands it to this provider. */
 const scenarioModel = Effect.gen(function* () {
@@ -88,14 +74,10 @@ interface Conversation {
 }
 
 const textOf = (message: AssistantMessage): string =>
-  message.content
-    .flatMap((block) => (block.type === "text" ? [block.text] : []))
-    .join("");
+  message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
 
 /** One runtime and one conversation, driven the way pi drives a provider. */
-const scenarioSession = Effect.fn("ScenarioDriver.session")(function* (
-  runtime: ProviderRuntime,
-) {
+const scenarioSession = Effect.fn("ScenarioDriver.session")(function* (runtime: ProviderRuntime) {
   const model = yield* scenarioModel;
   const conversation = yield* Ref.make<Conversation>({
     systemPrompt: "You are a scenario.",
@@ -134,14 +116,11 @@ const scenarioSession = Effect.fn("ScenarioDriver.session")(function* (
         return stream.result();
       });
       yield* append(answer);
-      yield* Console.log(
-        `  ${answer.stopReason}: ${answer.errorMessage ?? textOf(answer)}`,
-      );
+      yield* Console.log(`  ${answer.stopReason}: ${answer.errorMessage ?? textOf(answer)}`);
       return answer;
     });
 
-  const user = (text: string) =>
-    append({ role: "user", content: text, timestamp: Date.now() });
+  const user = (text: string) => append({ role: "user", content: text, timestamp: Date.now() });
 
   /** Say something and get the model's answer. */
   const say = (
@@ -180,8 +159,7 @@ const scenarioSession = Effect.fn("ScenarioDriver.session")(function* (
     user,
     append,
     answerToolCalls,
-    update: (change: (current: Conversation) => Conversation) =>
-      Ref.update(conversation, change),
+    update: (change: (current: Conversation) => Conversation) => Ref.update(conversation, change),
     retireParked: Effect.promise(() => runtime.retireParkedProcesses()),
     /** What pi's session cleanup does when it disposes this session. */
     retireSession: Effect.promise(() => runtime.retireSession(SESSION_ID)),
@@ -197,11 +175,7 @@ const expectDone = (answer: AssistantMessage, text: string) =>
     `expected a completed answer containing "${text}", got ${answer.stopReason}: ${answer.errorMessage ?? textOf(answer)}`,
   );
 
-const expectError = (
-  answer: AssistantMessage,
-  reason: "error" | "aborted",
-  text: string,
-) =>
+const expectError = (answer: AssistantMessage, reason: "error" | "aborted", text: string) =>
   expect(
     answer.stopReason === reason && (answer.errorMessage ?? "").includes(text),
     `expected ${reason} mentioning "${text}", got ${answer.stopReason}: ${answer.errorMessage ?? textOf(answer)}`,
@@ -294,9 +268,7 @@ const toolRoundTrip = (session: ScenarioSession) =>
     const asked = yield* session.say("please tool:read");
     yield* expect(
       asked.stopReason === "toolUse" &&
-        asked.content.some(
-          (block) => block.type === "toolCall" && block.name === "read",
-        ),
+        asked.content.some((block) => block.type === "toolCall" && block.name === "read"),
       `expected a read toolCall, got ${asked.stopReason}`,
     );
     yield* session.answerToolCalls("FILE-CONTENT");
@@ -325,14 +297,9 @@ const changedToolsBetweenTurns = (session: ScenarioSession) =>
   });
 
 const toolCallNames = (message: AssistantMessage): ReadonlyArray<string> =>
-  message.content.flatMap((block) =>
-    block.type === "toolCall" ? [block.name] : [],
-  );
+  message.content.flatMap((block) => (block.type === "toolCall" ? [block.name] : []));
 
-const expectToolCalls = (
-  answer: AssistantMessage,
-  names: ReadonlyArray<string>,
-) =>
+const expectToolCalls = (answer: AssistantMessage, names: ReadonlyArray<string>) =>
   expect(
     answer.stopReason === "toolUse" &&
       [...toolCallNames(answer)].sort().join() === [...names].sort().join(),
@@ -343,9 +310,7 @@ const expectToolCalls = (
 
 const scenarios: Record<
   string,
-  (
-    session: ScenarioSession,
-  ) => Effect.Effect<void, unknown, FileSystem.FileSystem | Path.Path>
+  (session: ScenarioSession) => Effect.Effect<void, unknown, FileSystem.FileSystem | Path.Path>
 > = {
   "fresh-spawn": (session) =>
     Effect.gen(function* () {
@@ -360,10 +325,7 @@ const scenarios: Record<
 
   "tool-handoff": (session) =>
     Effect.gen(function* () {
-      yield* expectDone(
-        yield* toolRoundTrip(session),
-        "TOOL-DONE FILE-CONTENT",
-      );
+      yield* expectDone(yield* toolRoundTrip(session), "TOOL-DONE FILE-CONTENT");
       yield* expectToolLists([["read", "bash"]]);
     }),
 
@@ -379,10 +341,7 @@ const scenarios: Record<
       );
       // Each result must reach the call that asked for it.
       yield* session.answerToolCalls((toolName) => `${toolName}-RESULT`);
-      yield* expectDone(
-        yield* session.call(),
-        "TOOL-DONE read-RESULT|bash-RESULT",
-      );
+      yield* expectDone(yield* session.call(), "TOOL-DONE read-RESULT|bash-RESULT");
     }),
 
   "tool-abandoned": (session) =>
@@ -396,10 +355,7 @@ const scenarios: Record<
   "handoff-proxy-off": (session) =>
     Effect.gen(function* () {
       const asked = yield* session.say("please tool:read");
-      yield* expect(
-        asked.stopReason === "toolUse",
-        `expected toolUse, got ${asked.stopReason}`,
-      );
+      yield* expect(asked.stopReason === "toolUse", `expected toolUse, got ${asked.stopReason}`);
       yield* session.answerToolCalls("FILE-CONTENT");
       yield* expectDone(yield* session.call(), "PORT-OK");
     }),
@@ -464,32 +420,22 @@ const scenarios: Record<
   "thinking-change": (session) =>
     Effect.gen(function* () {
       yield* session.say("hello");
-      yield* expectDone(
-        yield* session.say("think harder", { reasoning: "high" }),
-        "PORT-OK",
-      );
+      yield* expectDone(yield* session.say("think harder", { reasoning: "high" }), "PORT-OK");
     }),
 
   "thinking-refused": (session) =>
     Effect.gen(function* () {
       yield* session.say("hello");
-      yield* expectDone(
-        yield* session.say("think harder", { reasoning: "high" }),
-        "PORT-OK",
-      );
+      yield* expectDone(yield* session.say("think harder", { reasoning: "high" }), "PORT-OK");
     }),
 
   "abort-mid-stream": (session) =>
     Effect.gen(function* () {
       const controller = new AbortController();
       // Abort once the first text has reached pi.
-      const answer = yield* session.say(
-        "hang",
-        { signal: controller.signal },
-        (event) => {
-          if (event.type === "text_delta") controller.abort();
-        },
-      );
+      const answer = yield* session.say("hang", { signal: controller.signal }, (event) => {
+        if (event.type === "text_delta") controller.abort();
+      });
       yield* expectError(answer, "aborted", "Request aborted");
       yield* expect(
         textOf(answer).includes("PARTIAL"),
@@ -544,16 +490,13 @@ const scenarios: Record<
       const frames = yield* stdinFrames;
       const imported = frames.slice(-5);
       yield* expect(
-        imported
-          .map((frame) => `${frame.type}${frame.held ? ":held" : ""}`)
-          .join(" ") === "user:held assistant user:held assistant user",
+        imported.map((frame) => `${frame.type}${frame.held ? ":held" : ""}`).join(" ") ===
+          "user:held assistant user:held assistant user",
         `expected the history as five ordered messages, got ${JSON.stringify(frames.map((frame) => [frame.type, frame.held]))}`,
       );
       const [, call, result] = imported;
       const toolUse = call?.content.find((block) => block.type === "tool_use");
-      const toolResult = result?.content.find(
-        (block) => block.type === "tool_result",
-      );
+      const toolResult = result?.content.find((block) => block.type === "tool_result");
       yield* expect(
         toolUse?.name === "mcp__custom-tools__read" &&
           toolUse.id !== undefined &&
@@ -579,9 +522,7 @@ const scenarios: Record<
       yield* expectDone(yield* session.say("think about it"), "PORT-OK");
       // Unchanged history into a fresh process: the block goes back signed.
       yield* expectDone(yield* session.say("first follow-up"), "PORT-OK");
-      const replayed = (yield* stdinFrames).filter(
-        (frame) => frame.type === "assistant",
-      );
+      const replayed = (yield* stdinFrames).filter((frame) => frame.type === "assistant");
       yield* expect(
         replayed.length === 1 &&
           replayed[0]?.content[0]?.type === "thinking" &&
@@ -598,18 +539,14 @@ const scenarios: Record<
             ? {
                 ...message,
                 content: message.content.map((block) =>
-                  block.type === "text"
-                    ? { ...block, text: "PORT-OK, edited" }
-                    : block,
+                  block.type === "text" ? { ...block, text: "PORT-OK, edited" } : block,
                 ),
               }
             : message,
         ),
       }));
       yield* expectDone(yield* session.say("second follow-up"), "PORT-OK");
-      const afterEdit = (yield* stdinFrames)
-        .filter((frame) => frame.type === "assistant")
-        .slice(1);
+      const afterEdit = (yield* stdinFrames).filter((frame) => frame.type === "assistant").slice(1);
       yield* expect(
         afterEdit.length === 2 &&
           afterEdit[0]?.content[0]?.type === "text" &&
@@ -693,11 +630,7 @@ const scenarios: Record<
 
   "stream-mismatch": (session) =>
     Effect.gen(function* () {
-      yield* expectError(
-        yield* session.say("mismatch"),
-        "error",
-        "stream was inconsistent",
-      );
+      yield* expectError(yield* session.say("mismatch"), "error", "stream was inconsistent");
       yield* Effect.sleep("200 millis");
     }),
 
@@ -706,17 +639,14 @@ const scenarios: Record<
       const answer = yield* session.say("think");
       yield* expectDone(answer, "PORT-OK");
       yield* expect(
-        answer.responseId?.startsWith("msg_stub_") === true &&
-          answer.rawStopReason === "end_turn",
+        answer.responseId?.startsWith("msg_stub_") === true && answer.rawStopReason === "end_turn",
         `expected the API message id and raw stop reason, got ${answer.responseId} ${answer.rawStopReason}`,
       );
       yield* expect(
         answer.usage.cacheWrite1h === 7 && answer.usage.reasoning === 2,
         `expected the usage breakdown, got ${JSON.stringify(answer.usage)}`,
       );
-      const types = (answer.diagnostics ?? []).map(
-        (diagnostic) => diagnostic.type,
-      );
+      const types = (answer.diagnostics ?? []).map((diagnostic) => diagnostic.type);
       // Signed thinking is conversation content: it stays off `diagnostics`,
       // which pi's bug report collects without asking.
       yield* expect(
@@ -741,11 +671,7 @@ const scenarios: Record<
 
   "turn-fails": (session) =>
     Effect.gen(function* () {
-      yield* expectError(
-        yield* session.say("failturn"),
-        "error",
-        "stub: the turn failed",
-      );
+      yield* expectError(yield* session.say("failturn"), "error", "stub: the turn failed");
       yield* Effect.sleep("200 millis");
     }),
 
@@ -758,10 +684,7 @@ const scenarios: Record<
 
   "no-session": (session) =>
     Effect.gen(function* () {
-      yield* expectDone(
-        yield* session.say("hello", { sessionId: undefined }),
-        "PORT-OK",
-      );
+      yield* expectDone(yield* session.say("hello", { sessionId: undefined }), "PORT-OK");
       yield* Effect.sleep("200 millis");
     }),
 
@@ -793,13 +716,9 @@ const scenarios: Record<
         "--resume",
         "--dangerously-skip-permissions",
       ])
-        yield* expect(
-          !argv.includes(forbidden),
-          `expected the launch never to use ${forbidden}`,
-        );
+        yield* expect(!argv.includes(forbidden), `expected the launch never to use ${forbidden}`);
       yield* expect(
-        argv.includes("--no-session-persistence") &&
-          argv.includes("--strict-mcp-config"),
+        argv.includes("--no-session-persistence") && argv.includes("--strict-mcp-config"),
         "expected session persistence off and a strict MCP config",
       );
       const seen = yield* readStubFile("env.json");
@@ -819,17 +738,12 @@ const scenarios: Record<
       );
       yield* expect(
         asked.stopReason === "toolUse" &&
-          asked.content.some(
-            (block) => block.type === "toolCall" && block.name === "read",
-          ),
+          asked.content.some((block) => block.type === "toolCall" && block.name === "read"),
         `expected a read toolCall from the model, got ${asked.stopReason}: ${asked.errorMessage ?? textOf(asked)}`,
       );
       yield* session.answerToolCalls("the file says: hello");
       yield* expectDone(yield* session.call(), "");
-      yield* expectDone(
-        yield* session.say("Answer with the single word OK."),
-        "",
-      );
+      yield* expectDone(yield* session.say("Answer with the single word OK."), "");
     }),
 
   "live-structured-import": (session) =>
@@ -863,9 +777,7 @@ const scenarios: Record<
       );
       yield* expectToolCalls(asked, ["read", "bash"]);
       // Distinct results: each must reach the call that asked for it.
-      yield* session.answerToolCalls((toolName) =>
-        toolName === "read" ? "ALPHA-17" : "BRAVO-42",
-      );
+      yield* session.answerToolCalls((toolName) => (toolName === "read" ? "ALPHA-17" : "BRAVO-42"));
       const answer = yield* session.call();
       yield* expectDone(answer, "read=ALPHA-17");
       yield* expectDone(answer, "bash=BRAVO-42");
@@ -873,10 +785,7 @@ const scenarios: Record<
 
   "live-tools-change": (session) =>
     Effect.gen(function* () {
-      yield* expectDone(
-        yield* session.say("Answer with the single word OK."),
-        "",
-      );
+      yield* expectDone(yield* session.say("Answer with the single word OK."), "");
       // A tool added between turns.
       yield* session.update((current) => ({
         ...current,
@@ -905,10 +814,7 @@ const scenarios: Record<
         ...current,
         tools: current.tools.filter((each) => each.name !== "fetch"),
       }));
-      yield* expectDone(
-        yield* session.say("Answer with the single word OK."),
-        "OK",
-      );
+      yield* expectDone(yield* session.say("Answer with the single word OK."), "OK");
     }),
 
   "env-stripping": (session) =>
@@ -945,9 +851,9 @@ const scenarios: Record<
 /** The arguments the first CLI process was launched with. */
 const launchArgv = Effect.gen(function* () {
   const first = (yield* readStubFile("argv.jsonl")).trim().split("\n")[0];
-  return yield* Schema.decodeUnknownEffect(
-    Schema.fromJsonString(Schema.Array(Schema.String)),
-  )(first);
+  return yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.String)))(
+    first,
+  );
 });
 
 /** The private runtime directory, read from the path the CLI was launched with. */
@@ -980,9 +886,7 @@ const layerBuildFailureScenario = Effect.gen(function* () {
   const runtime = startProviderRuntime(
     providerLayer.pipe(
       Layer.provideMerge(
-        Layer.effectDiscard(
-          Effect.fail(new Error("scenario: the provider layer cannot build")),
-        ),
+        Layer.effectDiscard(Effect.fail(new Error("scenario: the provider layer cannot build"))),
       ),
     ),
   );
@@ -1019,9 +923,7 @@ const runScenario = (name: string) => {
   return Effect.gen(function* () {
     const runtime = startProviderRuntime();
     const session = yield* scenarioSession(runtime);
-    yield* scenario(session).pipe(
-      Effect.ensuring(Effect.promise(() => runtime.dispose())),
-    );
+    yield* scenario(session).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())));
   });
 };
 
@@ -1031,9 +933,7 @@ const main = Effect.gen(function* () {
   yield* runScenario(name);
 }).pipe(
   Effect.tapError((error) =>
-    Console.error(
-      `scenario FAILED: ${error instanceof Error ? error.message : String(error)}`,
-    ),
+    Console.error(`scenario FAILED: ${error instanceof Error ? error.message : String(error)}`),
   ),
   Effect.provide(nodeFileSystemLayer),
 );

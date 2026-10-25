@@ -1,10 +1,6 @@
 import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
-import {
-  createToolCallIdMap,
-  isClaudeToolUseId,
-  toolCallIdsOf,
-} from "../src/tool-call-id";
+import { describe, expect, it } from "vite-plus/test";
+import { createToolCallIdMap, isClaudeToolUseId, toolCallIdsOf } from "../src/tool-call-id";
 
 /** An OpenAI Responses id: far too long, and with a `|`. */
 const RESPONSES_ID = `call_${"a".repeat(40)}|fc_${"b".repeat(400)}`;
@@ -68,11 +64,9 @@ describe("createToolCallIdMap", () => {
 
   it("derives the same id for the same pi id in every conversation", () => {
     const first = createToolCallIdMap([RESPONSES_ID]).toClaude(RESPONSES_ID);
-    const later = createToolCallIdMap([
-      "toolu_other",
-      "call_x|y",
+    const later = createToolCallIdMap(["toolu_other", "call_x|y", RESPONSES_ID]).toClaude(
       RESPONSES_ID,
-    ]).toClaude(RESPONSES_ID);
+    );
     expect(later).toBe(first);
   });
 
@@ -97,9 +91,7 @@ describe("createToolCallIdMap", () => {
 });
 
 describe("toolCallIdsOf", () => {
-  const assistant = (
-    content: AssistantMessage["content"],
-  ): AssistantMessage => ({
+  const assistant = (content: AssistantMessage["content"]): AssistantMessage => ({
     role: "assistant",
     content,
     api: "pi-claude-cli",

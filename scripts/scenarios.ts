@@ -32,10 +32,7 @@ import {
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import {
-  nodeChildProcessSpawnerLayer,
-  nodeFileSystemLayer,
-} from "../src/node-platform.ts";
+import { nodeChildProcessSpawnerLayer, nodeFileSystemLayer } from "../src/node-platform.ts";
 
 /** One or more scenarios did not pass. */
 class ScenariosFailed extends Data.TaggedError("ScenariosFailed")<{
@@ -111,39 +108,25 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
         "--max-ms",
         "500",
       ],
-      [
-        "--order",
-        "episode[outcome=done],episode[outcome=error]:end,episode[mode=turn]",
-      ],
+      ["--order", "episode[outcome=done],episode[outcome=error]:end,episode[mode=turn]"],
     ],
     { command: { _tag: "Script", path: "scripts/scenarios/trace-sample.ts" } },
   ),
-  scenario(
-    "fresh-spawn",
-    "a first call launches a process, streams, and parks it",
-    [
-      [
-        ...episode("mode=spawn", "outcome=done", "spawnReason=noParked"),
-        ...count(1),
-      ],
-      [...span("ClaudeCli.spawn"), "--under", "episode", ...count(1)],
-      [...span("ClaudeProcessPool.park", "idleMs=3600000"), ...count(1)],
-      [...span("ProviderRuntime.build", "toolBridge=inband"), ...count(1)],
-      [...span("ClaudeProcess"), "--status", "ok", ...count(1)],
-    ],
-  ),
-  scenario(
-    "warm-turn",
-    "a follow-up reuses the parked process and sends only the new turn",
-    [
-      [...episode(), ...count(2), "--same", "pid"],
-      [...episode("mode=spawn"), ...count(1)],
-      [...episode("mode=turn", "outcome=done"), ...count(1)],
-      [...span("ClaudeCli.spawn"), ...count(1)],
-      [...span("ClaudeProcessPool.take", "hit=true"), ...count(1)],
-      ["--order", "episode[mode=spawn],episode[mode=turn]"],
-    ],
-  ),
+  scenario("fresh-spawn", "a first call launches a process, streams, and parks it", [
+    [...episode("mode=spawn", "outcome=done", "spawnReason=noParked"), ...count(1)],
+    [...span("ClaudeCli.spawn"), "--under", "episode", ...count(1)],
+    [...span("ClaudeProcessPool.park", "idleMs=3600000"), ...count(1)],
+    [...span("ProviderRuntime.build", "toolBridge=inband"), ...count(1)],
+    [...span("ClaudeProcess"), "--status", "ok", ...count(1)],
+  ]),
+  scenario("warm-turn", "a follow-up reuses the parked process and sends only the new turn", [
+    [...episode(), ...count(2), "--same", "pid"],
+    [...episode("mode=spawn"), ...count(1)],
+    [...episode("mode=turn", "outcome=done"), ...count(1)],
+    [...span("ClaudeCli.spawn"), ...count(1)],
+    [...span("ClaudeProcessPool.take", "hit=true"), ...count(1)],
+    ["--order", "episode[mode=spawn],episode[mode=turn]"],
+  ]),
   scenario(
     "tool-handoff",
     "a tool call is held open while pi runs the tool, then answered in-process",
@@ -152,12 +135,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       [...episode("mode=spawn", "outcome=toolUse"), ...count(1)],
       [...episode("mode=handoff", "outcome=done"), ...count(1)],
       [...span("ClaudeProcessPool.park", "idleMs=1800000"), ...count(1)],
-      [
-        ...span("toolCall", "tool=read", "outcome=ok"),
-        "--status",
-        "ok",
-        ...count(1),
-      ],
+      [...span("toolCall", "tool=read", "outcome=ok"), "--status", "ok", ...count(1)],
       [...span("toolCall"), "--under", "ClaudeProcess", ...count(1)],
       [...span("ClaudeCli.spawn"), ...count(1)],
       [
@@ -173,12 +151,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       [...episode(), ...count(2), "--same", "pid"],
       [...episode("mode=handoff", "outcome=done"), ...count(1)],
       [...span("toolCall", "outcome=ok"), ...count(2), "--distinct", "tool"],
-      [
-        ...span("toolCall", "outcome=ok"),
-        ...count(2),
-        "--distinct",
-        "toolUseId",
-      ],
+      [...span("toolCall", "outcome=ok"), ...count(2), "--distinct", "toolUseId"],
       [...span("ClaudeCli.spawn"), ...count(1)],
     ],
   ),
@@ -223,36 +196,21 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     [...span("ClaudeProcess.retire", "cause=signature"), ...count(1)],
     [...episode(), ...count(2), "--distinct", "pid"],
   ]),
-  scenario(
-    "changed-tools",
-    "a changed tool surface is applied to the live process",
+  scenario("changed-tools", "a changed tool surface is applied to the live process", [
     [
-      [
-        ...span(
-          "ClaudeProcess.applyTools",
-          "acknowledged=true",
-          "from=2",
-          "to=1",
-          "midTurn=false",
-        ),
-        ...count(1),
-      ],
-      [...episode("mode=turn", "outcome=done", "tools=1"), ...count(1)],
-      [...span("ClaudeCli.spawn"), ...count(1)],
-      [...episode(), ...count(2), "--same", "pid"],
+      ...span("ClaudeProcess.applyTools", "acknowledged=true", "from=2", "to=1", "midTurn=false"),
+      ...count(1),
     ],
-  ),
+    [...episode("mode=turn", "outcome=done", "tools=1"), ...count(1)],
+    [...span("ClaudeCli.spawn"), ...count(1)],
+    [...episode(), ...count(2), "--same", "pid"],
+  ]),
   scenario(
     "changed-tools-handoff",
     "tools that change while a tool call is open are applied before its result",
     [
       [
-        ...span(
-          "ClaudeProcess.applyTools",
-          "acknowledged=true",
-          "to=3",
-          "midTurn=true",
-        ),
+        ...span("ClaudeProcess.applyTools", "acknowledged=true", "to=3", "midTurn=true"),
         ...count(1),
       ],
       [...episode("mode=handoff", "outcome=done"), ...count(1)],
@@ -265,54 +223,38 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "changed-tools-refused",
     "a CLI that does not list its tools again is replaced by a fresh process",
     [
-      [
-        ...span("ClaudeProcess.applyTools", "acknowledged=false"),
-        ...count(1),
-        "--min-ms",
-        "2500",
-      ],
+      [...span("ClaudeProcess.applyTools", "acknowledged=false"), ...count(1), "--min-ms", "2500"],
       [...episode("mode=spawn", "spawnReason=tools"), ...count(1)],
       [...span("ClaudeProcess.retire", "cause=tools"), ...count(1)],
       [...episode(), ...count(2), "--distinct", "pid"],
     ],
     { env: { CLAUDE_STUB_IGNORE_TOOLS_CHANGED: "1" } },
   ),
-  scenario(
-    "foreign-provider",
-    "a turn answered by another provider retires the process",
+  scenario("foreign-provider", "a turn answered by another provider retires the process", [
+    [...episode("mode=spawn", "spawnReason=foreignProvider"), ...count(1)],
+    [...span("ClaudeProcess.retire", "cause=history"), ...count(1)],
+    [...episode(), ...count(2), "--distinct", "pid"],
+  ]),
+  scenario("thinking-change", "a new thinking level is applied to the live process", [
     [
-      [...episode("mode=spawn", "spawnReason=foreignProvider"), ...count(1)],
-      [...span("ClaudeProcess.retire", "cause=history"), ...count(1)],
-      [...episode(), ...count(2), "--distinct", "pid"],
+      ...span(
+        "ClaudeProcess.applyThinking",
+        "acknowledged=true",
+        "from=disabled",
+        "to=enabled",
+        "controls=2",
+      ),
+      ...count(1),
     ],
-  ),
-  scenario(
-    "thinking-change",
-    "a new thinking level is applied to the live process",
-    [
-      [
-        ...span(
-          "ClaudeProcess.applyThinking",
-          "acknowledged=true",
-          "from=disabled",
-          "to=enabled",
-          "controls=2",
-        ),
-        ...count(1),
-      ],
-      [...episode("mode=turn"), ...count(1)],
-      [...span("ClaudeCli.spawn"), ...count(1)],
-      [...episode(), ...count(2), "--same", "pid"],
-    ],
-  ),
+    [...episode("mode=turn"), ...count(1)],
+    [...span("ClaudeCli.spawn"), ...count(1)],
+    [...episode(), ...count(2), "--same", "pid"],
+  ]),
   scenario(
     "thinking-refused",
     "a refused thinking change falls back to a fresh process",
     [
-      [
-        ...span("ClaudeProcess.applyThinking", "acknowledged=false"),
-        ...count(1),
-      ],
+      [...span("ClaudeProcess.applyThinking", "acknowledged=false"), ...count(1)],
       [...episode("mode=spawn", "spawnReason=thinking"), ...count(1)],
       [...span("ClaudeProcess.retire", "cause=thinking"), ...count(1)],
       [...span("ClaudeCli.spawn"), ...count(2)],
@@ -332,10 +274,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       ],
       [...span("ClaudeProcessPool.park"), "--max-count", "0"],
       [...episode("wire.stream_event=3"), ...count(1)],
-      [
-        "--order",
-        "episode[outcome=aborted]:end,ClaudeProcess.retire[cause=abort]:end",
-      ],
+      ["--order", "episode[outcome=aborted]:end,ClaudeProcess.retire[cause=abort]:end"],
     ],
   ),
   scenario(
@@ -360,14 +299,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "inactivity-timeout",
     "a silent CLI fails the episode and is killed without a grace period",
     [
-      [
-        ...episode("outcome=error"),
-        "--status",
-        "error",
-        ...count(1),
-        "--min-ms",
-        "300",
-      ],
+      [...episode("outcome=error"), "--status", "error", ...count(1), "--min-ms", "300"],
       [
         ...span("ClaudeProcess.retire", "cause=timeout", "ended=killed"),
         ...count(1),
@@ -391,14 +323,8 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "structured-import",
     "a fresh process gets pi's history as messages, with valid tool call ids",
     [
-      [
-        ...episode("mode=spawn", "import=structured", "importFrames=5"),
-        ...count(1),
-      ],
-      [
-        ...span("ClaudeProcess.importHistory", "frames=5", "acknowledged=true"),
-        ...count(1),
-      ],
+      [...episode("mode=spawn", "import=structured", "importFrames=5"), ...count(1)],
+      [...span("ClaudeProcess.importHistory", "frames=5", "acknowledged=true"), ...count(1)],
       [...span("ClaudeProcess.retire", "cause=import"), "--max-count", "0"],
     ],
     {
@@ -413,10 +339,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "a fresh process gets signed thinking back only while pi's message is unchanged",
     [
       [...episode("mode=spawn", "import=structured"), ...count(3)],
-      [
-        ...span("ClaudeProcess.importHistory", "acknowledged=true"),
-        ...count(3),
-      ],
+      [...span("ClaudeProcess.importHistory", "acknowledged=true"), ...count(3)],
     ],
     {
       env: {
@@ -429,15 +352,9 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "structured-import-refused",
     "a CLI that answers a held message is retired and the history imported as text into a fresh process",
     [
-      [
-        ...span("ClaudeProcess.importHistory", "acknowledged=false"),
-        ...count(1),
-      ],
+      [...span("ClaudeProcess.importHistory", "acknowledged=false"), ...count(1)],
       [...span("ClaudeProcess.retire", "cause=import"), ...count(1)],
-      [
-        ...episode("import=flat", "importRefused=true", "outcome=done"),
-        ...count(1),
-      ],
+      [...episode("import=flat", "importRefused=true", "outcome=done"), ...count(1)],
     ],
     {
       env: {
@@ -456,28 +373,17 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     ],
     { env: { PI_CLAUDE_CLI_IMPORT: "flat", PI_CLAUDE_CLI_KEEPALIVE_MS: "0" } },
   ),
-  scenario(
-    "process-dies",
-    "a process that dies mid-turn fails the episode with its stderr",
-    [
-      [...episode("outcome=error"), "--status", "error", ...count(1)],
-      [...span("ClaudeProcess", "exitCode=3"), ...count(1)],
-      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
-      [...span("ClaudeProcess.retire"), ...count(1)],
-    ],
-  ),
-  scenario(
-    "turn-fails",
-    "an error result fails the episode and retires the process",
-    [
-      [...episode("outcome=error"), "--status", "error", ...count(1)],
-      [
-        ...span("ClaudeProcess.retire", "cause=failure", "ended=exited"),
-        ...count(1),
-      ],
-      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
-    ],
-  ),
+  scenario("process-dies", "a process that dies mid-turn fails the episode with its stderr", [
+    [...episode("outcome=error"), "--status", "error", ...count(1)],
+    [...span("ClaudeProcess", "exitCode=3"), ...count(1)],
+    [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+    [...span("ClaudeProcess.retire"), ...count(1)],
+  ]),
+  scenario("turn-fails", "an error result fails the episode and retires the process", [
+    [...episode("outcome=error"), "--status", "error", ...count(1)],
+    [...span("ClaudeProcess.retire", "cause=failure", "ended=exited"), ...count(1)],
+    [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+  ]),
   scenario(
     "usage-credits-guard",
     "a call charged to usage credits ends with a billing error and its process is retired",
@@ -505,19 +411,8 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "usage-credits-after-handoff",
     "a usage-credit charge reported after a tool call stops the next call before the tool result is sent",
     [
-      [
-        ...episode("mode=spawn", "outcome=toolUse", "rateLimit.usageCredits"),
-        "--max-count",
-        "0",
-      ],
-      [
-        ...episode(
-          "mode=handoff",
-          "outcome=error",
-          "rateLimit.usageCredits=true",
-        ),
-        ...count(1),
-      ],
+      [...episode("mode=spawn", "outcome=toolUse", "rateLimit.usageCredits"), "--max-count", "0"],
+      [...episode("mode=handoff", "outcome=error", "rateLimit.usageCredits=true"), ...count(1)],
       [...span("toolCall", "outcome=ok"), "--max-count", "0"],
       [...span("ClaudeProcess.retire", "cause=failure"), ...count(1)],
     ],
@@ -544,37 +439,26 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "pi's message carries the response id, raw stop reason, usage breakdown and diagnostics",
     [
       [
-        ...episode(
-          "outcome=done",
-          "rateLimit.status=allowed",
-          "rateLimit.usageCredits=false",
-        ),
+        ...episode("outcome=done", "rateLimit.status=allowed", "rateLimit.usageCredits=false"),
         ...count(1),
       ],
     ],
   ),
-  scenario(
-    "session-retire",
-    "pi's cleanup of a session retires the process parked for it",
+  scenario("session-retire", "pi's cleanup of a session retires the process parked for it", [
+    [...span("ClaudeProcessPool.retireSession", "hit=true"), ...count(1)],
+    // One by the cleanup, one by the runtime's disposal at the end.
+    [...span("ClaudeProcess.retire", "cause=shutdown"), ...count(2)],
+    [...episode("mode=spawn", "spawnReason=noParked"), ...count(2)],
     [
-      [...span("ClaudeProcessPool.retireSession", "hit=true"), ...count(1)],
-      // One by the cleanup, one by the runtime's disposal at the end.
-      [...span("ClaudeProcess.retire", "cause=shutdown"), ...count(2)],
-      [...episode("mode=spawn", "spawnReason=noParked"), ...count(2)],
-      [
-        "--order",
-        "ClaudeProcessPool.retireSession,ClaudeProcess.retire[cause=shutdown]:end,episode[spawnReason=noParked]",
-      ],
+      "--order",
+      "ClaudeProcessPool.retireSession,ClaudeProcess.retire[cause=shutdown]:end,episode[spawnReason=noParked]",
     ],
-  ),
+  ]),
   scenario(
     "idle-expiry",
     "a parked process is retired when nobody comes back within the keepalive",
     [
-      [
-        ...span("ClaudeProcess.retire", "cause=idle", "ended=exited"),
-        ...count(1),
-      ],
+      [...span("ClaudeProcess.retire", "cause=idle", "ended=exited"), ...count(1)],
       [...span("ClaudeProcessPool.park", "idleMs=300"), ...count(2)],
       [...episode("mode=spawn"), ...count(2)],
       [...span("ClaudeProcessPool.take", "hit=false"), ...count(2)],
@@ -589,26 +473,16 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "no-session",
     "a call without a pi session is served and its process ended, not parked",
     [
-      [
-        ...episode("mode=spawn", "spawnReason=noSession", "outcome=done"),
-        ...count(1),
-      ],
+      [...episode("mode=spawn", "spawnReason=noSession", "outcome=done"), ...count(1)],
       [...span("ClaudeProcess.retire", "cause=unparked"), ...count(1)],
       [...span("ClaudeProcessPool.park"), "--max-count", "0"],
     ],
   ),
-  scenario(
-    "lifecycle-retire",
-    "a pi lifecycle event retires the parked process",
-    [
-      [
-        ...span("ClaudeProcess.retire", "cause=shutdown", "ended=exited"),
-        ...count(2),
-      ],
-      [...episode("mode=spawn", "spawnReason=noParked"), ...count(2)],
-      [...span("ClaudeProcessPool.retireAll", "count=1"), ...count(2)],
-    ],
-  ),
+  scenario("lifecycle-retire", "a pi lifecycle event retires the parked process", [
+    [...span("ClaudeProcess.retire", "cause=shutdown", "ended=exited"), ...count(2)],
+    [...episode("mode=spawn", "spawnReason=noParked"), ...count(2)],
+    [...span("ClaudeProcessPool.retireAll", "count=1"), ...count(2)],
+  ]),
   scenario(
     "session-shutdown",
     "disposing the runtime ends the parked process and removes the directory",
@@ -663,10 +537,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "wire-counts",
     "by default the wire is recorded as counts and time to first token only",
     [
-      [
-        ...episode("wire.stream_event=6", "wire.result=1", "ttftMs"),
-        ...count(1),
-      ],
+      [...episode("wire.stream_event=6", "wire.result=1", "ttftMs"), ...count(1)],
       ["--event", "wire *", "--max-count", "0"],
     ],
     { command: { _tag: "Driver", scenario: Option.some("fresh-spawn") } },
@@ -675,14 +546,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "wire-events",
     "PI_CLAUDE_CLI_TRACE_WIRE=1 adds one event per wire message, without content",
     [
-      [
-        ...episode(),
-        "--event",
-        "wire stream_event",
-        "--event",
-        "wire result",
-        ...count(1),
-      ],
+      [...episode(), "--event", "wire stream_event", "--event", "wire result", ...count(1)],
       ["--event", "wire raw", "--max-count", "0"],
     ],
     {
@@ -736,10 +600,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       [...episode("mode=spawn", "outcome=done"), ...count(1)],
       [...span("ClaudeProcessPool.park", "idleMs=3600000"), ...count(1)],
       [...span("ProviderRuntime.dispose"), ...count(1)],
-      [
-        ...span("ClaudeProcess.retire", "cause=shutdown", "ended=exited"),
-        ...count(1),
-      ],
+      [...span("ClaudeProcess.retire", "cause=shutdown", "ended=exited"), ...count(1)],
     ],
     { command: { _tag: "Pi", prompt: "magic word" } },
   ),
@@ -761,14 +622,8 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     "LIVE: a history with an open tool call and signed thinking, imported as messages into fresh processes",
     [
       [...episode("mode=spawn", "import=structured"), ...count(3)],
-      [
-        ...episode("mode=spawn", "import=structured", "outcome=done"),
-        ...count(2),
-      ],
-      [
-        ...span("ClaudeProcess.importHistory", "acknowledged=true"),
-        ...count(3),
-      ],
+      [...episode("mode=spawn", "import=structured", "outcome=done"), ...count(2)],
+      [...span("ClaudeProcess.importHistory", "acknowledged=true"), ...count(3)],
       [...span("ClaudeProcess.retire", "cause=import"), "--max-count", "0"],
       [...span("ClaudeCli.spawn"), ...count(3)],
     ],
@@ -782,12 +637,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       [...episode("mode=spawn", "outcome=toolUse"), ...count(1)],
       [...episode("mode=handoff", "outcome=done"), ...count(1)],
       [...span("toolCall", "outcome=ok"), ...count(2), "--distinct", "tool"],
-      [
-        ...span("toolCall", "outcome=ok"),
-        ...count(2),
-        "--distinct",
-        "toolUseId",
-      ],
+      [...span("toolCall", "outcome=ok"), ...count(2), "--distinct", "toolUseId"],
       [...span("ClaudeCli.spawn"), ...count(1)],
     ],
     { live: true },
@@ -798,16 +648,8 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     [
       [...episode(), ...count(5), "--same", "pid"],
       [...span("ClaudeCli.spawn"), ...count(1)],
-      [
-        ...span("ClaudeProcess.applyTools", "acknowledged=true"),
-        ...count(3),
-        "--max-ms",
-        "1000",
-      ],
-      [
-        ...span("ClaudeProcess.applyTools", "midTurn=true", "to=4"),
-        ...count(1),
-      ],
+      [...span("ClaudeProcess.applyTools", "acknowledged=true"), ...count(3), "--max-ms", "1000"],
+      [...span("ClaudeProcess.applyTools", "midTurn=true", "to=4"), ...count(1)],
       [...span("ClaudeProcess.applyTools", "from=4", "to=3"), ...count(1)],
       [...span("toolCall", "outcome=ok"), ...count(2), "--distinct", "tool"],
       [...episode("mode=handoff"), ...count(2)],
@@ -854,10 +696,7 @@ const runScenario = Effect.fn("Scenarios.run")(function* (
           Option.getOrElse(scenario.command.scenario, () => scenario.name),
         ];
       case "Script":
-        return [
-          process.execPath,
-          path.join(setup.repoRoot, scenario.command.path),
-        ];
+        return [process.execPath, path.join(setup.repoRoot, scenario.command.path)];
       case "Pi":
         // `-ne` so an installed copy of this package cannot win the
         // provider name over the working tree.
@@ -890,9 +729,7 @@ const runScenario = Effect.fn("Scenarios.run")(function* (
           killSignal: "SIGKILL",
         }),
       );
-      const output = yield* Stream.mkString(Stream.decodeText(handle.all)).pipe(
-        Effect.forkChild,
-      );
+      const output = yield* Stream.mkString(Stream.decodeText(handle.all)).pipe(Effect.forkChild);
       const exitCode = Number(yield* handle.exitCode);
       return { exitCode, output: yield* Fiber.join(output) };
     }).pipe(
@@ -905,16 +742,7 @@ const runScenario = Effect.fn("Scenarios.run")(function* (
 
   const failures: Array<string> = [];
   const ran = yield* run(
-    [
-      process.execPath,
-      traceCli,
-      "run",
-      "--quiet",
-      "--file",
-      traceFile,
-      "--",
-      ...command,
-    ],
+    [process.execPath, traceCli, "run", "--quiet", "--file", traceFile, "--", ...command],
     {
       // The stub stands in for `claude`, except in the live scenario.
       PATH: scenario.live
@@ -931,25 +759,13 @@ const runScenario = Effect.fn("Scenarios.run")(function* (
     },
   );
   if (Option.isNone(ran))
-    failures.push(
-      `the command did not exit within ${Duration.toSeconds(SCENARIO_TIMEOUT)}s`,
-    );
+    failures.push(`the command did not exit within ${Duration.toSeconds(SCENARIO_TIMEOUT)}s`);
   else if (ran.value.exitCode !== 0)
-    failures.push(
-      `the command exited ${ran.value.exitCode}\n${ran.value.output.trim()}`,
-    );
+    failures.push(`the command exited ${ran.value.exitCode}\n${ran.value.output.trim()}`);
 
   for (const assertion of scenario.asserts) {
     const checked = yield* run(
-      [
-        process.execPath,
-        traceCli,
-        "assert",
-        "--quiet",
-        "--file",
-        traceFile,
-        ...assertion,
-      ],
+      [process.execPath, traceCli, "assert", "--quiet", "--file", traceFile, ...assertion],
       {},
     );
     if (Option.isNone(checked) || checked.value.exitCode !== 0)
@@ -967,9 +783,7 @@ const scenariosCommand = Command.make(
   "scenarios",
   {
     names: Argument.String("scenario").pipe(
-      Argument.withDescription(
-        "Scenarios to run (default: every stub scenario)",
-      ),
+      Argument.withDescription("Scenarios to run (default: every stub scenario)"),
       Argument.variadic(),
     ),
     list: Flag.Boolean("list").pipe(
@@ -990,21 +804,16 @@ const scenariosCommand = Command.make(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     if (input.list) {
-      for (const each of SCENARIOS)
-        yield* Console.log(`${each.name.padEnd(22)} ${each.about}`);
+      for (const each of SCENARIOS) yield* Console.log(`${each.name.padEnd(22)} ${each.about}`);
       return;
     }
-    const unknown = input.names.filter(
-      (name) => !SCENARIOS.some((each) => each.name === name),
-    );
+    const unknown = input.names.filter((name) => !SCENARIOS.some((each) => each.name === name));
     if (unknown.length > 0) {
       yield* Console.error(`unknown scenario: ${unknown.join(", ")}`);
       return yield* new ScenariosFailed({ names: unknown });
     }
     const selected = SCENARIOS.filter((each) =>
-      input.names.length > 0
-        ? input.names.includes(each.name)
-        : input.live || !each.live,
+      input.names.length > 0 ? input.names.includes(each.name) : input.live || !each.live,
     );
 
     const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -1029,10 +838,7 @@ const scenariosCommand = Command.make(
               run.failures.length === 0
                 ? `ok    ${each.name}`
                 : `FAIL  ${each.name}\n${run.failures
-                    .map(
-                      (failure) =>
-                        `      ${failure.replace(/\n/g, "\n      ")}`,
-                    )
+                    .map((failure) => `      ${failure.replace(/\n/g, "\n      ")}`)
                     .join("\n")}`,
             ),
           ),
@@ -1040,21 +846,16 @@ const scenariosCommand = Command.make(
       { concurrency: input.concurrency },
     );
     const failed = runs.filter((run) => run.failures.length > 0);
-    yield* Console.log(
-      `\n${runs.length - failed.length} of ${runs.length} scenarios passed`,
-    );
+    yield* Console.log(`\n${runs.length - failed.length} of ${runs.length} scenarios passed`);
     if (input.keep)
-      for (const run of runs)
-        yield* Console.log(`  ${run.scenario.name}: ${run.traceFile}`);
+      for (const run of runs) yield* Console.log(`  ${run.scenario.name}: ${run.traceFile}`);
     if (failed.length > 0)
       return yield* new ScenariosFailed({
         names: failed.map((run) => run.scenario.name),
       });
   }, Effect.scoped),
 ).pipe(
-  Command.withDescription(
-    "Run provider scenarios against the stub CLI and assert on their traces",
-  ),
+  Command.withDescription("Run provider scenarios against the stub CLI and assert on their traces"),
 );
 
 const scenariosLayer = Layer.mergeAll(
@@ -1065,8 +866,6 @@ const scenariosLayer = Layer.mergeAll(
 );
 
 NodeRuntime.runMain(
-  Command.run(scenariosCommand, { version: "1" }).pipe(
-    Effect.provide(scenariosLayer),
-  ),
+  Command.run(scenariosCommand, { version: "1" }).pipe(Effect.provide(scenariosLayer)),
   { disableErrorReporting: true },
 );

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach } from "vite-plus/test";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { DEFAULT_THINKING_BUDGETS } from "@earendil-works/pi-ai/api/simple-options";
@@ -24,11 +24,8 @@ const sonnet5 = catalogue("claude-sonnet-5"); // adaptive, off allowed
 const opus46 = catalogue("claude-opus-4-6"); // adaptive, max but no xhigh
 const opus55 = catalogue("claude-opus-5-5"); // adaptive, off: null
 
-const enabled = (
-  budgetTokens: number,
-  effort: string,
-  display = "summarized",
-): CliThinking => ({ kind: "enabled", budgetTokens, effort, display }) as any;
+const enabled = (budgetTokens: number, effort: string, display = "summarized"): CliThinking =>
+  ({ kind: "enabled", budgetTokens, effort, display }) as any;
 
 describe("resolveCliThinking: parity with pi-ai's Anthropic streamSimple", () => {
   afterEach(() => delete process.env.PI_CLAUDE_CLI_THINKING_DISPLAY);
@@ -63,9 +60,7 @@ describe("resolveCliThinking: parity with pi-ai's Anthropic streamSimple", () =>
   });
 
   it("clamps xhigh and max budgets to high, as pi does", () => {
-    expect((resolveCliThinking(haiku, "xhigh") as any).budgetTokens).toBe(
-      16384,
-    );
+    expect((resolveCliThinking(haiku, "xhigh") as any).budgetTokens).toBe(16384);
     expect((resolveCliThinking(haiku, "max") as any).budgetTokens).toBe(16384);
   });
 
@@ -91,22 +86,13 @@ describe("resolveCliThinking: parity with pi-ai's Anthropic streamSimple", () =>
     const t = resolveCliThinking(haiku, "medium", { medium: 12000 });
     expect((t as any).budgetTokens).toBe(12000);
     // Other rungs keep pi's defaults.
-    expect(
-      (resolveCliThinking(haiku, "low", { medium: 12000 }) as any).budgetTokens,
-    ).toBe(2048);
+    expect((resolveCliThinking(haiku, "low", { medium: 12000 }) as any).budgetTokens).toBe(2048);
   });
 
   it("never asks for a budget the API would reject", () => {
-    expect(
-      (resolveCliThinking(haiku, "low", { low: 10 }) as any).budgetTokens,
-    ).toBe(1024);
-    expect(
-      (resolveCliThinking(haiku, "low", { low: 3000.7 }) as any).budgetTokens,
-    ).toBe(3000);
-    expect(
-      (resolveCliThinking(haiku, "low", { low: Number.NaN }) as any)
-        .budgetTokens,
-    ).toBe(2048);
+    expect((resolveCliThinking(haiku, "low", { low: 10 }) as any).budgetTokens).toBe(1024);
+    expect((resolveCliThinking(haiku, "low", { low: 3000.7 }) as any).budgetTokens).toBe(3000);
+    expect((resolveCliThinking(haiku, "low", { low: Number.NaN }) as any).budgetTokens).toBe(2048);
   });
 
   it("turns pi's off (reasoning undefined) into thinking disabled", () => {
@@ -128,27 +114,18 @@ describe("resolveCliThinking: parity with pi-ai's Anthropic streamSimple", () =>
   });
 
   it("asks for summaries unless PI_CLAUDE_CLI_THINKING_DISPLAY=omitted", () => {
-    expect((resolveCliThinking(sonnet5, "high") as any).display).toBe(
-      "summarized",
-    );
+    expect((resolveCliThinking(sonnet5, "high") as any).display).toBe("summarized");
     process.env.PI_CLAUDE_CLI_THINKING_DISPLAY = " Omitted ";
-    expect((resolveCliThinking(sonnet5, "high") as any).display).toBe(
-      "omitted",
-    );
+    expect((resolveCliThinking(sonnet5, "high") as any).display).toBe("omitted");
     process.env.PI_CLAUDE_CLI_THINKING_DISPLAY = "whatever";
-    expect((resolveCliThinking(sonnet5, "high") as any).display).toBe(
-      "summarized",
-    );
+    expect((resolveCliThinking(sonnet5, "high") as any).display).toBe("summarized");
   });
 });
 
 describe("thinkingSpawnArgs", () => {
   it("spells each kind with the CLI's flags", () => {
     expect(thinkingSpawnArgs({ kind: "default" })).toEqual([]);
-    expect(thinkingSpawnArgs({ kind: "disabled" })).toEqual([
-      "--thinking",
-      "disabled",
-    ]);
+    expect(thinkingSpawnArgs({ kind: "disabled" })).toEqual(["--thinking", "disabled"]);
     expect(thinkingSpawnArgs(enabled(8192, "medium"))).toEqual([
       "--max-thinking-tokens",
       "8192",
@@ -172,45 +149,36 @@ describe("thinkingControls", () => {
   });
 
   it("sends nothing when the thinking is unchanged", () => {
-    expect(
-      thinkingControls(enabled(8192, "medium"), enabled(8192, "medium")),
-    ).toEqual([]);
-    expect(
-      thinkingControls({ kind: "disabled" }, { kind: "disabled" }),
-    ).toEqual([]);
+    expect(thinkingControls(enabled(8192, "medium"), enabled(8192, "medium"))).toEqual([]);
+    expect(thinkingControls({ kind: "disabled" }, { kind: "disabled" })).toEqual([]);
     expect(sameThinking({ kind: "default" }, { kind: "default" })).toBe(true);
   });
 
   it("turns thinking off with an explicit zero budget", () => {
-    expect(
-      thinkingControls(enabled(8192, "medium"), { kind: "disabled" }),
-    ).toEqual([{ subtype: "set_max_thinking_tokens", max_thinking_tokens: 0 }]);
+    expect(thinkingControls(enabled(8192, "medium"), { kind: "disabled" })).toEqual([
+      { subtype: "set_max_thinking_tokens", max_thinking_tokens: 0 },
+    ]);
   });
 
   it("changes only what differs between two enabled levels", () => {
     // Budget models: medium -> high moves both; adaptive: effort only when
     // the budget happens to match.
-    expect(
-      thinkingControls(enabled(8192, "medium"), enabled(16384, "high")),
-    ).toEqual([setBudget(16384), setEffort("high")]);
-    expect(
-      thinkingControls(enabled(16384, "high"), enabled(16384, "xhigh")),
-    ).toEqual([setEffort("xhigh")]);
-    expect(
-      thinkingControls(
-        enabled(8192, "medium"),
-        enabled(8192, "medium", "omitted"),
-      ),
-    ).toEqual([setBudget(8192, "omitted")]);
+    expect(thinkingControls(enabled(8192, "medium"), enabled(16384, "high"))).toEqual([
+      setBudget(16384),
+      setEffort("high"),
+    ]);
+    expect(thinkingControls(enabled(16384, "high"), enabled(16384, "xhigh"))).toEqual([
+      setEffort("xhigh"),
+    ]);
+    expect(thinkingControls(enabled(8192, "medium"), enabled(8192, "medium", "omitted"))).toEqual([
+      setBudget(8192, "omitted"),
+    ]);
   });
 
   it("re-enables with budget, display and effort, in that order", () => {
     // A process spawned disabled has no display of its own; the effort must
     // follow the budget so it lands on an enabled session.
-    for (const from of [
-      { kind: "disabled" },
-      { kind: "default" },
-    ] as CliThinking[]) {
+    for (const from of [{ kind: "disabled" }, { kind: "default" }] as CliThinking[]) {
       expect(thinkingControls(from, enabled(2048, "low"))).toEqual([
         setBudget(2048),
         setEffort("low"),
@@ -229,12 +197,8 @@ describe("thinkingControls", () => {
   });
 
   it("asks for a spawn to return to the CLI default", () => {
-    expect(
-      thinkingControls(enabled(8192, "medium"), { kind: "default" }),
-    ).toBeUndefined();
-    expect(
-      thinkingControls({ kind: "disabled" }, { kind: "default" }),
-    ).toBeUndefined();
+    expect(thinkingControls(enabled(8192, "medium"), { kind: "default" })).toBeUndefined();
+    expect(thinkingControls({ kind: "disabled" }, { kind: "default" })).toBeUndefined();
   });
 });
 
@@ -248,22 +212,11 @@ describe("cliThinkingLevelMap: only levels the model has through Claude Code", (
   };
 
   it.each([
-    [
-      ["claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5"],
-      "off minimal low medium high",
-    ],
+    [["claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5"], "off minimal low medium high"],
     [["claude-opus-4-6", "claude-sonnet-4-6"], "off low medium high max"],
+    [["claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5"], "off low medium high xhigh max"],
     [
-      ["claude-opus-4-7", "claude-opus-4-8", "claude-sonnet-5"],
-      "off low medium high xhigh max",
-    ],
-    [
-      [
-        "claude-opus-5",
-        "claude-opus-5-5",
-        "claude-fable-5",
-        "claude-fable-5-1",
-      ],
+      ["claude-opus-5", "claude-opus-5-5", "claude-fable-5", "claude-fable-5-1"],
       "low medium high xhigh max",
     ],
   ])("%j offer: %s", (ids, levels) => {
@@ -275,9 +228,7 @@ describe("cliThinkingLevelMap: only levels the model has through Claude Code", (
       const native = getSupportedThinkingLevels(m as any);
       const ours = offered(m.id);
       const adaptive = (m as any).compat?.forceAdaptiveThinking === true;
-      expect(ours, m.id).toEqual(
-        adaptive ? native.filter((l) => l !== "minimal") : native,
-      );
+      expect(ours, m.id).toEqual(adaptive ? native.filter((l) => l !== "minimal") : native);
     }
   });
 
@@ -316,9 +267,9 @@ describe("cliThinkingLevelMap: only levels the model has through Claude Code", (
   it("leaves a model without a map, or a budget model, as pi has it", () => {
     expect(cliThinkingLevelMap({})).toBeUndefined();
     expect(cliThinkingLevelMap({ thinkingLevelMap: null })).toBeUndefined();
-    expect(
-      cliThinkingLevelMap({ compat: { forceAdaptiveThinking: true } }),
-    ).toEqual({ minimal: null });
+    expect(cliThinkingLevelMap({ compat: { forceAdaptiveThinking: true } })).toEqual({
+      minimal: null,
+    });
   });
 });
 
@@ -330,21 +281,15 @@ describe("providerThinkingLevel: the effort a response ran at", () => {
 
   it("is the effort on every adaptive model with thinking on", () => {
     for (const model of [sonnet5, opus46, opus55])
-      expect(
-        providerThinkingLevel(registered(model), enabled(8192, "medium")),
-      ).toBe("medium");
+      expect(providerThinkingLevel(registered(model), enabled(8192, "medium"))).toBe("medium");
   });
 
   it("is none on a budget model, which ignores the effort", () => {
-    expect(
-      providerThinkingLevel(registered(haiku), enabled(8192, "medium")),
-    ).toBeUndefined();
+    expect(providerThinkingLevel(registered(haiku), enabled(8192, "medium"))).toBeUndefined();
   });
 
   it("is none without thinking", () => {
     for (const thinking of [{ kind: "disabled" }, { kind: "default" }] as const)
-      expect(
-        providerThinkingLevel(registered(sonnet5), thinking),
-      ).toBeUndefined();
+      expect(providerThinkingLevel(registered(sonnet5), thinking)).toBeUndefined();
   });
 });

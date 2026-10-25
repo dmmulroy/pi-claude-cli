@@ -1,0 +1,11 @@
+overrides:
+  vite@*: npm:@voidzero-dev/vite-plus-core@1.2.0
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: "*"
+# Build scripts of pi's own dependencies; none is needed for development.
+allowBuilds:
+  "@google/genai": false
+  protobufjs: false

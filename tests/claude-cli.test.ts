@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { launchEnvironment } from "../src/claude-cli";
 import {
   SUBSCRIPTION_OVERRIDE_ENV_VARS,

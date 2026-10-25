@@ -189,9 +189,7 @@ pi needs the stream returned synchronously. `index.ts` stays free of Effect impo
 // index.ts, inside the factory
 let loaded: Promise<ProviderRuntime> | undefined;
 const provider = () =>
-  (loaded ??= import("./src/provider-runtime.ts").then((m) =>
-    m.startProviderRuntime(),
-  ));
+  (loaded ??= import("./src/provider-runtime.ts").then((m) => m.startProviderRuntime()));
 
 const streamSimple = (model, context, options) => {
   const piStream = createAssistantMessageEventStream();
@@ -319,15 +317,8 @@ interface IClaudeProcessPool {
     launch: ClaudeProcessLaunch,
   ) => Effect.Effect<IClaudeProcess, CliRequirementError | CliSpawnError>;
   readonly take: (id: string) => Effect.Effect<Option.Option<IClaudeProcess>>;
-  readonly park: (
-    id: string,
-    p: IClaudeProcess,
-    idle: Duration.Duration,
-  ) => Effect.Effect<void>;
-  readonly retireInBackground: (
-    p: IClaudeProcess,
-    cause: RetireCause,
-  ) => Effect.Effect<void>;
+  readonly park: (id: string, p: IClaudeProcess, idle: Duration.Duration) => Effect.Effect<void>;
+  readonly retireInBackground: (p: IClaudeProcess, cause: RetireCause) => Effect.Effect<void>;
   readonly retireAll: (cause: RetireCause) => Effect.Effect<void>;
 }
 ```

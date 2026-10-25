@@ -35,28 +35,22 @@ const maxReducer = Struct.makeReducer<TokenUsage>({
 export const ZERO_TOKEN_USAGE: TokenUsage = sumReducer.initialValue;
 
 /** Component-wise sum. */
-export const addTokenUsage = (a: TokenUsage, b: TokenUsage): TokenUsage =>
-  sumReducer.combine(a, b);
+export const addTokenUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => sumReducer.combine(a, b);
 
 /** Component-wise maximum. */
-export const maxTokenUsage = (a: TokenUsage, b: TokenUsage): TokenUsage =>
-  maxReducer.combine(a, b);
+export const maxTokenUsage = (a: TokenUsage, b: TokenUsage): TokenUsage => maxReducer.combine(a, b);
 
 /** `a − b`, floored at zero per component. */
 export const subtractTokenUsage = (a: TokenUsage, b: TokenUsage): TokenUsage =>
   maxTokenUsage(ZERO_TOKEN_USAGE, {
     input_tokens: a.input_tokens - b.input_tokens,
     output_tokens: a.output_tokens - b.output_tokens,
-    cache_read_input_tokens:
-      a.cache_read_input_tokens - b.cache_read_input_tokens,
-    cache_creation_input_tokens:
-      a.cache_creation_input_tokens - b.cache_creation_input_tokens,
+    cache_read_input_tokens: a.cache_read_input_tokens - b.cache_read_input_tokens,
+    cache_creation_input_tokens: a.cache_creation_input_tokens - b.cache_creation_input_tokens,
   });
 
 /** A `usage` object from the wire, with absent counters as zero. */
-export const tokenUsageFromClaudeUsage = (
-  usage: ClaudeUsage | null | undefined,
-): TokenUsage => ({
+export const tokenUsageFromClaudeUsage = (usage: ClaudeUsage | null | undefined): TokenUsage => ({
   input_tokens: usage?.input_tokens ?? 0,
   output_tokens: usage?.output_tokens ?? 0,
   cache_read_input_tokens: usage?.cache_read_input_tokens ?? 0,

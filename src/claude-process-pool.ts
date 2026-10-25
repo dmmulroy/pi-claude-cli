@@ -7,17 +7,7 @@
  * exclusive: `take` removes it, so two calls can never share one.
  */
 
-import {
-  Clock,
-  Context,
-  Duration,
-  Effect,
-  FiberHandle,
-  HashMap,
-  Layer,
-  Option,
-  Ref,
-} from "effect";
+import { Clock, Context, Duration, Effect, FiberHandle, HashMap, Layer, Option, Ref } from "effect";
 import { ClaudeCli, claudeCliLayer } from "./claude-cli.ts";
 import {
   type ClaudeProcessLaunch,
@@ -34,9 +24,7 @@ export interface IClaudeProcessPool {
     launch: ClaudeProcessLaunch,
   ) => Effect.Effect<IClaudeProcess, CliRequirementError | CliSpawnError>;
   /** Remove and return the live process parked for a pi session, if any. */
-  readonly take: (
-    piSessionId: string,
-  ) => Effect.Effect<Option.Option<IClaudeProcess>>;
+  readonly take: (piSessionId: string) => Effect.Effect<Option.Option<IClaudeProcess>>;
   /**
    * Keep a process for its pi session's next call, and retire it if nobody
    * comes back within `idle`. A process already parked there is retired.
@@ -50,24 +38,17 @@ export interface IClaudeProcessPool {
    * Retire a process without waiting for it: retiring can take seconds, and
    * pi must not wait that long for an error or an abort.
    */
-  readonly retireInBackground: (
-    process: IClaudeProcess,
-    cause: RetireCause,
-  ) => Effect.Effect<void>;
+  readonly retireInBackground: (process: IClaudeProcess, cause: RetireCause) => Effect.Effect<void>;
   /** Retire every parked process and wait for them to be gone. */
   readonly retireAll: (cause: RetireCause) => Effect.Effect<void>;
   /** Retire the process parked for one pi session, if any, and wait for it. */
-  readonly retireSession: (
-    piSessionId: string,
-    cause: RetireCause,
-  ) => Effect.Effect<void>;
+  readonly retireSession: (piSessionId: string, cause: RetireCause) => Effect.Effect<void>;
 }
 
 /** Provides the pool of CLI processes. */
-export class ClaudeProcessPool extends Context.Service<
-  ClaudeProcessPool,
-  IClaudeProcessPool
->()("pi-claude-cli/ClaudeProcessPool") {}
+export class ClaudeProcessPool extends Context.Service<ClaudeProcessPool, IClaudeProcessPool>()(
+  "pi-claude-cli/ClaudeProcessPool",
+) {}
 
 interface ParkedProcess {
   readonly process: IClaudeProcess;
@@ -111,10 +92,7 @@ export const makeClaudeProcessPool = Effect.gen(function* () {
   /** Drop the session's entry, but only while it still holds this process. */
   const forget = (piSessionId: string, process: IClaudeProcess) =>
     Ref.update(parked, (entries) =>
-      Option.exists(
-        HashMap.get(entries, piSessionId),
-        (entry) => entry.process === process,
-      )
+      Option.exists(HashMap.get(entries, piSessionId), (entry) => entry.process === process)
         ? HashMap.remove(entries, piSessionId)
         : entries,
     );
@@ -178,19 +156,16 @@ export const makeClaudeProcessPool = Effect.gen(function* () {
 
     retireInBackground,
 
-    retireAll: Effect.fn("ClaudeProcessPool.retireAll")(function* (
-      cause: RetireCause,
-    ) {
+    retireAll: Effect.fn("ClaudeProcessPool.retireAll")(function* (cause: RetireCause) {
       const entries = yield* Ref.getAndSet(parked, HashMap.empty());
       yield* Effect.annotateCurrentSpan({
         cause,
         count: HashMap.size(entries),
       });
-      yield* Effect.forEach(
-        HashMap.toValues(entries),
-        (entry) => entry.process.retire(cause),
-        { concurrency: "unbounded", discard: true },
-      );
+      yield* Effect.forEach(HashMap.toValues(entries), (entry) => entry.process.retire(cause), {
+        concurrency: "unbounded",
+        discard: true,
+      });
     }),
 
     retireSession: Effect.fn("ClaudeProcessPool.retireSession")(function* (
@@ -214,5 +189,6 @@ export const claudeProcessPoolLayerWithoutDependencies = Layer.effect(
 );
 
 /** Provides the pool over the real Claude CLI. */
-export const claudeProcessPoolLayer =
-  claudeProcessPoolLayerWithoutDependencies.pipe(Layer.provide(claudeCliLayer));
+export const claudeProcessPoolLayer = claudeProcessPoolLayerWithoutDependencies.pipe(
+  Layer.provide(claudeCliLayer),
+);

@@ -29,14 +29,11 @@ const program = Effect.gen(function* () {
   );
   if (process.argv.includes("--leak")) {
     // A span whose fiber is abandoned: started, never ended.
-    const leaked = yield* Effect.never.pipe(
-      Effect.withSpan("ClaudeProcess"),
-      Effect.forkDetach,
-    );
+    const leaked = yield* Effect.never.pipe(Effect.withSpan("ClaudeProcess"), Effect.forkDetach);
     yield* Effect.sleep("5 millis");
     void Fiber.isFiber(leaked);
     process.exit(0);
   }
 });
 
-Effect.runPromise(program.pipe(Effect.provide(tracingLayer)));
+void Effect.runPromise(program.pipe(Effect.provide(tracingLayer)));

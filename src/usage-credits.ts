@@ -26,8 +26,7 @@ export function isChargedToUsageCredits(info: ClaudeRateLimitInfo): boolean {
 
 /** The error pi shows when a call was charged to usage credits. */
 export function usageCreditsChargeMessage(info: ClaudeRateLimitInfo): string {
-  const window =
-    typeof info.rateLimitType === "string" ? `, ${info.rateLimitType}` : "";
+  const window = typeof info.rateLimitType === "string" ? `, ${info.rateLimitType}` : "";
   return (
     "Claude billing: this request was charged to Claude usage credits instead of your plan limits " +
     `(rate limit status ${info.status ?? "unknown"}${window}). ` +
@@ -48,9 +47,7 @@ const USAGE_CREDITS_REJECTION =
  * An actionable, non-retryable rewrite of an Anthropic usage-credit
  * rejection, or undefined for any other error.
  */
-export function describeUsageCreditsRejection(
-  errorMessage: string,
-): string | undefined {
+export function describeUsageCreditsRejection(errorMessage: string): string | undefined {
   if (errorMessage.startsWith("Claude billing:")) return undefined;
   if (!USAGE_CREDITS_REJECTION.test(errorMessage)) return undefined;
   return (

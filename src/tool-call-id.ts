@@ -24,8 +24,7 @@ const MAPPED_ID_PREFIX = "toolu_pi_";
 const MAPPED_ID_HASH_LENGTH = 40;
 
 /** True when Claude accepts `id` as it is. */
-export const isClaudeToolUseId = (id: string): boolean =>
-  CLAUDE_TOOL_USE_ID.test(id);
+export const isClaudeToolUseId = (id: string): boolean => CLAUDE_TOOL_USE_ID.test(id);
 
 /** The two directions of one conversation's tool call ids. */
 export interface ToolCallIdMap {
@@ -50,9 +49,7 @@ const derivedId = (piToolCallId: string, attempt: number): string =>
  * derived id that is already taken, by a valid id or another derived one, is
  * derived again.
  */
-export function createToolCallIdMap(
-  piToolCallIds: Iterable<string>,
-): ToolCallIdMap {
+export function createToolCallIdMap(piToolCallIds: Iterable<string>): ToolCallIdMap {
   const distinct = [...new Set(piToolCallIds)];
   const toClaude = new Map<string, string>();
   const toPi = new Map<string, string>();
@@ -73,9 +70,7 @@ export function createToolCallIdMap(
   return {
     toClaude: (piToolCallId) =>
       toClaude.get(piToolCallId) ??
-      (isClaudeToolUseId(piToolCallId)
-        ? piToolCallId
-        : derivedId(piToolCallId, 0)),
+      (isClaudeToolUseId(piToolCallId) ? piToolCallId : derivedId(piToolCallId, 0)),
     toPi: (claudeToolUseId) => toPi.get(claudeToolUseId) ?? claudeToolUseId,
   };
 }
@@ -86,8 +81,7 @@ export function toolCallIdsOf(messages: ReadonlyArray<Message>): string[] {
   for (const message of messages) {
     if (message.role === "toolResult") ids.push(message.toolCallId);
     else if (message.role === "assistant")
-      for (const block of message.content)
-        if (block.type === "toolCall") ids.push(block.id);
+      for (const block of message.content) if (block.type === "toolCall") ids.push(block.id);
   }
   return ids;
 }

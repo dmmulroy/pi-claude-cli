@@ -6,7 +6,7 @@ import type {
   UserMessage,
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import {
   historyHash,
   piContext,
@@ -94,9 +94,11 @@ describe("pi transcript normalization", () => {
   });
 
   it("supports legacy Context and an explicitly empty tool set", () => {
-    expect(
-      piContext({ systemPrompt: "hello", messages: [], tools: [] }),
-    ).toEqual({ systemPrompt: "hello", messages: [], tools: [] });
+    expect(piContext({ systemPrompt: "hello", messages: [], tools: [] })).toEqual({
+      systemPrompt: "hello",
+      messages: [],
+      tools: [],
+    });
   });
 
   it("treats a context with no prompt and no tools as empty, not as an error", () => {
@@ -138,15 +140,10 @@ describe("historyHash", () => {
   it("changes with any model-visible content", () => {
     const base = historyHash(history);
     const edited = [user("hello, edited"), ...history.slice(1)];
-    const failedTool = [
-      ...history.slice(0, 2),
-      toolResult("file", { isError: true }),
-    ];
+    const failedTool = [...history.slice(0, 2), toolResult("file", { isError: true })];
     const otherArgs = [
       history[0],
-      assistant([
-        { type: "toolCall", id: "call-1", name: "read", arguments: { p: 2 } },
-      ]),
+      assistant([{ type: "toolCall", id: "call-1", name: "read", arguments: { p: 2 } }]),
       history[2],
     ];
     expect(historyHash(edited)).not.toBe(base);
@@ -192,8 +189,7 @@ describe("replayPiMessages", () => {
 
 describe("structuredReplay", () => {
   const MODEL = "claude-haiku-4-5";
-  const replay = (messages: ReadonlyArray<Message>) =>
-    structuredReplay(messages, MODEL);
+  const replay = (messages: ReadonlyArray<Message>) => structuredReplay(messages, MODEL);
   const FOREIGN_ID = `call_${"x".repeat(80)}|fc_1`;
   const freeze = <T>(value: T): T => {
     if (typeof value === "object" && value !== null) {
@@ -266,10 +262,11 @@ describe("structuredReplay", () => {
   it("maps a tool call id Claude rejects to one valid id on both sides", () => {
     const frames = replay([
       user("go"),
-      assistant(
-        [{ type: "toolCall", id: FOREIGN_ID, name: "read", arguments: {} }],
-        { api: "openai-responses", provider: "openai", model: "gpt" },
-      ),
+      assistant([{ type: "toolCall", id: FOREIGN_ID, name: "read", arguments: {} }], {
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt",
+      }),
       toolResult("file", { toolCallId: FOREIGN_ID }),
     ]);
     const call = frames?.[1]?.content[0];
@@ -284,9 +281,7 @@ describe("structuredReplay", () => {
   it("never changes pi's messages or the ids pi stored", () => {
     const messages = freeze<Message[]>([
       user("go"),
-      assistant([
-        { type: "toolCall", id: FOREIGN_ID, name: "read", arguments: { p: 1 } },
-      ]),
+      assistant([{ type: "toolCall", id: FOREIGN_ID, name: "read", arguments: { p: 1 } }]),
       toolResult("file", { toolCallId: FOREIGN_ID }),
     ]);
     const before = JSON.stringify(messages);
@@ -328,10 +323,9 @@ describe("structuredReplay", () => {
   it("leaves out failed and aborted turns and keeps their results as records", () => {
     const frames = replay([
       user("go"),
-      assistant(
-        [{ type: "toolCall", id: "toolu_01a", name: "read", arguments: {} }],
-        { stopReason: "aborted" },
-      ),
+      assistant([{ type: "toolCall", id: "toolu_01a", name: "read", arguments: {} }], {
+        stopReason: "aborted",
+      }),
       toolResult("late", { toolCallId: "toolu_01a" }),
       assistant([{ type: "text", text: "partial" }], { stopReason: "error" }),
       user("again"),
@@ -393,13 +387,9 @@ describe("structuredReplay", () => {
   it("declines a history that messages cannot express", () => {
     // Nothing for the model to answer.
     expect(replay([])).toBeUndefined();
-    expect(
-      replay([user("go"), assistant([{ type: "text", text: "a" }])]),
-    ).toBeUndefined();
+    expect(replay([user("go"), assistant([{ type: "text", text: "a" }])])).toBeUndefined();
     // No user message first.
-    expect(
-      replay([assistant([{ type: "text", text: "a" }]), user("b")]),
-    ).toBeUndefined();
+    expect(replay([assistant([{ type: "text", text: "a" }]), user("b")])).toBeUndefined();
     // Two assistant turns in a row.
     expect(
       replay([
@@ -428,9 +418,7 @@ describe("history import lines", () => {
 
   it("names the process's model on a replayed assistant message", () => {
     const content = [{ type: "text" as const, text: "hello" }];
-    expect(
-      JSON.parse(assistantReplayLine("claude-haiku-4-5", content)),
-    ).toEqual({
+    expect(JSON.parse(assistantReplayLine("claude-haiku-4-5", content))).toEqual({
       type: "assistant",
       message: { role: "assistant", model: "claude-haiku-4-5", content },
     });

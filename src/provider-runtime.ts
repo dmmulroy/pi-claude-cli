@@ -12,44 +12,24 @@
  * itself fails to build, in which case the episode never starts.
  */
 
-import type {
-  Api,
-  AssistantMessageEventStream,
-  Model,
-} from "@earendil-works/pi-ai";
-import {
-  Cause,
-  type Crypto,
-  Effect,
-  Exit,
-  Layer,
-  ManagedRuntime,
-  Option,
-} from "effect";
-import {
-  ClaudeProcessPool,
-  claudeProcessPoolLayer,
-} from "./claude-process-pool.ts";
-import {
-  type EpisodeEnd,
-  type EpisodeInput,
-  type EpisodeOptions,
-  runEpisode,
-} from "./episode.ts";
+import type { Api, AssistantMessageEventStream, Model } from "@earendil-works/pi-ai";
+import { Cause, type Crypto, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
+import { ClaudeProcessPool, claudeProcessPoolLayer } from "./claude-process-pool.ts";
+import { type EpisodeEnd, type EpisodeInput, type EpisodeOptions, runEpisode } from "./episode.ts";
 import { createEventBridge, type EventBridge } from "./event-bridge.ts";
 import { nodeCryptoLayer } from "./node-platform.ts";
 import { ProviderConfig, providerConfigLayer } from "./provider-config.ts";
-import {
-  RuntimeDirectory,
-  runtimeDirectoryLayer,
-} from "./runtime-directory.ts";
+import { RuntimeDirectory, runtimeDirectoryLayer } from "./runtime-directory.ts";
 import { endStreamWithDone, endStreamWithError } from "./terminal-event.ts";
 import { tracingLayer } from "./tracing.ts";
 import { describeUsageCreditsRejection } from "./usage-credits.ts";
 
 /** The services an episode runs on. */
 export type ProviderServices =
-  ProviderConfig | RuntimeDirectory | ClaudeProcessPool | Crypto.Crypto;
+  | ProviderConfig
+  | RuntimeDirectory
+  | ClaudeProcessPool
+  | Crypto.Crypto;
 
 /** The provider as pi's extension entry point sees it: no Effect types. */
 export interface ProviderRuntime {
@@ -106,8 +86,7 @@ const causeMessage = (cause: Cause.Cause<unknown>): string => {
   const error = Cause.findErrorOption(cause);
   if (Option.isSome(error)) {
     const value = error.value;
-    if (value instanceof Error && value.message.length > 0)
-      return value.message;
+    if (value instanceof Error && value.message.length > 0) return value.message;
   }
   return Cause.pretty(cause);
 };
@@ -128,16 +107,10 @@ const pushTerminalEvent = (
   exit: Exit.Exit<EpisodeEnd, unknown>,
 ): void => {
   const output = bridge.getOutput();
-  if (Exit.isSuccess(exit))
-    return endStreamWithDone(piStream, output, exit.value.stopReason);
+  if (Exit.isSuccess(exit)) return endStreamWithDone(piStream, output, exit.value.stopReason);
   if (Cause.hasInterruptsOnly(exit.cause))
     return endStreamWithError(piStream, output, "aborted", "Request aborted");
-  return endStreamWithError(
-    piStream,
-    output,
-    "error",
-    failureMessage(exit.cause),
-  );
+  return endStreamWithError(piStream, output, "error", failureMessage(exit.cause));
 };
 
 /**
@@ -174,23 +147,14 @@ export const startProviderRuntime = <E>(
         },
       );
     },
-    retireParkedProcesses: () =>
-      runtime.runPromise(retireParked).catch(() => undefined),
+    retireParkedProcesses: () => runtime.runPromise(retireParked).catch(() => undefined),
     retireSession: (piSessionId) =>
       runtime
-        .runPromise(
-          piSessionId === undefined
-            ? retireParked
-            : retireParkedSession(piSessionId),
-        )
+        .runPromise(piSessionId === undefined ? retireParked : retireParkedSession(piSessionId))
         .catch(() => undefined),
     dispose: async () => {
       await runtime
-        .runPromise(
-          retireParked.pipe(
-            Effect.withSpan("ProviderRuntime.dispose", { root: true }),
-          ),
-        )
+        .runPromise(retireParked.pipe(Effect.withSpan("ProviderRuntime.dispose", { root: true })))
         .catch(() => undefined);
       await runtime.dispose();
     },

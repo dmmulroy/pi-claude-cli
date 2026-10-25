@@ -58,13 +58,12 @@ Trace files (see the README) are not conversation storage: they record ids, name
 Unit tests cover the pure parts: current pi transcript format, history hashing, complete replay, thinking levels, overflow normalization and the event bridge. Everything stateful is verified by scenarios: the provider runs against a stub CLI and `trace assert` checks the recorded spans. The scenarios include usage-credit charges (before and after a handoff, refused and allowed), refusals, a stream that differs from the CLI's record, the fields of pi's message, session cleanup, changed prompts and history, tool lists changed between turns and during a tool call, a CLI that ignores the change, foreign-provider turns, warm reuse, tool handoff and its abandonment, thinking changes, abort, timeout, a dying process, idle expiry, lifecycle retirement, shutdown, environment stripping and launch flags.
 
 ```sh
-npm run typecheck
-npm run lint
-npm run test:coverage
-npm run test:scenarios
-npm run test:e2e
+vp check
+vp run test:coverage
+vp run test:scenarios
+vp run test:e2e
 node scripts/scenarios.ts --live
-PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts tests/live-structured-import.test.ts
+PI_OWNED_LIVE=1 vp test tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts tests/live-structured-import.test.ts
 ```
 
 The live checks use isolated fixtures, not user integrations, and spend subscription tokens. The live scenario runs one turn, one tool call held open and one warm follow-up on a single process. The real-pi RPC check executes read/edit, enforces a pi guard, switches through a deterministic native provider, then performs pi compaction and verifies recall. The thinking check reads the requests off the wire through a local proxy and confirms each level change reaches the model on one process. None asserts a universal token saving.

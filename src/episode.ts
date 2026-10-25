@@ -26,23 +26,9 @@ import type {
   SimpleStreamOptions,
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
-import {
-  Cause,
-  Clock,
-  Crypto,
-  Duration,
-  Effect,
-  Exit,
-  Option,
-  Queue,
-  Ref,
-} from "effect";
+import { Cause, Clock, Crypto, Duration, Effect, Exit, Option, Queue, Ref } from "effect";
 import { ClaudeProcessPool } from "./claude-process-pool.ts";
-import type {
-  IClaudeProcess,
-  ReportedRateLimit,
-  RetireCause,
-} from "./claude-process.ts";
+import type { IClaudeProcess, ReportedRateLimit, RetireCause } from "./claude-process.ts";
 import { cliMessageLabel, type ClaudeResultMessage } from "./cli-protocol.ts";
 import {
   decideEpisodeMode,
@@ -70,16 +56,10 @@ import {
 } from "./pi-context.ts";
 import { ProviderConfig } from "./provider-config.ts";
 import { RuntimeDirectory } from "./runtime-directory.ts";
-import {
-  providerThinkingLevel,
-  resolveCliThinking,
-} from "./thinking-config.ts";
+import { providerThinkingLevel, resolveCliThinking } from "./thinking-config.ts";
 import { isHandoffClaudeTool } from "./tool-mapping.ts";
 import { recordSpanEvent } from "./tracing.ts";
-import {
-  isChargedToUsageCredits,
-  usageCreditsChargeMessage,
-} from "./usage-credits.ts";
+import { isChargedToUsageCredits, usageCreditsChargeMessage } from "./usage-credits.ts";
 import {
   addTokenUsage,
   maxTokenUsage,
@@ -114,31 +94,24 @@ export interface EpisodeEnd {
 /** How the CLI's turn left the episode. */
 type TurnEnd =
   /** A tool call: the CLI is blocked on it and pi runs the tool. */
-  | { readonly _tag: "HandedOff"; }
+  | { readonly _tag: "HandedOff" }
   /** The `result` envelope arrived. */
-  | { readonly _tag: "TurnEnded"; readonly interrupted: boolean; };
+  | { readonly _tag: "TurnEnded"; readonly interrupted: boolean };
 
 const retireCauseForSpawn = (reason: SpawnReason): RetireCause => {
   if (reason === "thinking" || reason === "tools") return reason;
   return reason.startsWith("signature.") ? "signature" : "history";
 };
 
-const retireCauseForFailure = (
-  cause: Cause.Cause<EpisodeError>,
-): RetireCause => {
+const retireCauseForFailure = (cause: Cause.Cause<EpisodeError>): RetireCause => {
   if (Cause.hasInterruptsOnly(cause)) return "abort";
-  return Option.exists(
-    Cause.findErrorOption(cause),
-    (error) => error._tag === "InactivityTimeout",
-  )
+  return Option.exists(Cause.findErrorOption(cause), (error) => error._tag === "InactivityTimeout")
     ? "timeout"
     : "failure";
 };
 
 /** The error text of a failed `result`, as specific as the CLI was. */
-const resultErrorMessage = (
-  result: ClaudeResultMessage,
-): Option.Option<string> => {
+const resultErrorMessage = (result: ClaudeResultMessage): Option.Option<string> => {
   const errors = (result.errors ?? []).map(String);
   const failed =
     result.subtype !== "success" ||
@@ -150,9 +123,7 @@ const resultErrorMessage = (
   if (typeof result.result === "string" && result.is_error === true)
     return Option.some(result.result);
   if (errors.length > 0) return Option.some(errors.join("; "));
-  return Option.some(
-    `Claude CLI returned ${result.subtype ?? "non-success result"}`,
-  );
+  return Option.some(`Claude CLI returned ${result.subtype ?? "non-success result"}`);
 };
 
 const isToolResult = (message: Message): message is ToolResultMessage =>
@@ -165,9 +136,7 @@ const isToolResult = (message: Message): message is ToolResultMessage =>
  *   failure or interruption the process it was using is retired in the
  *   background, never parked.
  */
-export const runEpisode = Effect.fn("episode", { root: true })(function* (
-  input: EpisodeInput,
-) {
+export const runEpisode = Effect.fn("episode", { root: true })(function* (input: EpisodeInput) {
   const config = yield* ProviderConfig;
   const pool = yield* ClaudeProcessPool;
   const directory = yield* RuntimeDirectory;
@@ -183,11 +152,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     (id) => id.length > 0,
   );
   const cwd = options.cwd ?? process.cwd();
-  const thinking = resolveCliThinking(
-    model,
-    options.reasoning,
-    options.thinkingBudgets,
-  );
+  const thinking = resolveCliThinking(model, options.reasoning, options.thinkingBudgets);
   // Holding a tool call open needs a pi session to route the answer back to.
   const allowHandoff = config.handoffProxy && Option.isSome(piSessionId);
   const tools = mcpToolDefinitions(request.tools);
@@ -265,9 +230,9 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     // a process that is neither parked nor known to this episode.
     const parked = Option.isSome(piSessionId)
       ? yield* pool.take(piSessionId.value).pipe(
-        Effect.tap((taken) => Ref.set(borrowed, taken)),
-        Effect.uninterruptible,
-      )
+          Effect.tap((taken) => Ref.set(borrowed, taken)),
+          Effect.uninterruptible,
+        )
       : Option.none<IClaudeProcess>();
 
     let decision: EpisodeMode = { mode: "spawn", reason: "noSession" };
@@ -275,15 +240,15 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
       const facts = Option.isNone(parked)
         ? Option.none()
         : Option.some({
-          signature: parked.value.signature,
-          acknowledged: yield* Ref.get(parked.value.acknowledged),
-          turnActive: yield* parked.value.isTurnActive,
-          awaitsToolResults: yield* parked.value.awaitsToolCalls(
-            deltaMessages(messages)
-              .filter(isToolResult)
-              .map((message) => message.toolCallId),
-          ),
-        });
+            signature: parked.value.signature,
+            acknowledged: yield* Ref.get(parked.value.acknowledged),
+            turnActive: yield* parked.value.isTurnActive,
+            awaitsToolResults: yield* parked.value.awaitsToolCalls(
+              deltaMessages(messages)
+                .filter(isToolResult)
+                .map((message) => message.toolCallId),
+            ),
+          });
       decision = decideEpisodeMode(facts, {
         signature,
         messages,
@@ -362,9 +327,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
 
     const annotateWire = Effect.suspend(() =>
       Effect.annotateCurrentSpan({
-        ...Object.fromEntries(
-          [...wireCounts].map(([label, count]) => [`wire.${label}`, count]),
-        ),
+        ...Object.fromEntries([...wireCounts].map(([label, count]) => [`wire.${label}`, count])),
         ...Option.match(firstTokenMillis, {
           onNone: () => ({}),
           onSome: (millis) => ({ ttftMs: millis }),
@@ -381,12 +344,8 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     const takeMessage = Effect.gen(function* () {
       const limitMillis = Duration.toMillis(config.inactivityTimeout);
       while (true) {
-        const quietSince = Math.max(
-          startedAtMillis,
-          yield* process.lastOutputAtMillis,
-        );
-        const remainingMillis =
-          limitMillis - ((yield* Clock.currentTimeMillis) - quietSince);
+        const quietSince = Math.max(startedAtMillis, yield* process.lastOutputAtMillis);
+        const remainingMillis = limitMillis - ((yield* Clock.currentTimeMillis) - quietSince);
         if (remainingMillis <= 0)
           return yield* new InactivityTimeout({
             seconds: Duration.toSeconds(config.inactivityTimeout),
@@ -404,18 +363,17 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
         const label = cliMessageLabel(message);
         wireCounts.set(label, (wireCounts.get(label) ?? 0) + 1);
         if (config.traceWireDetail !== "counts" && Option.isSome(episodeSpan))
-          yield* recordSpanEvent(episodeSpan.value, `wire ${label}`, (message._tag === "StreamEvent"
-            ? { event: message.event.type }
-            : {}));
+          yield* recordSpanEvent(
+            episodeSpan.value,
+            `wire ${label}`,
+            message._tag === "StreamEvent" ? { event: message.event.type } : {},
+          );
 
         if (message._tag === "StreamEvent") {
           const event = message.event;
           if (Option.isNone(firstTokenMillis))
-            firstTokenMillis = Option.some(
-              (yield* Clock.currentTimeMillis) - startedAtMillis,
-            );
-          if (!selfInterrupted)
-            yield* Effect.sync(() => bridge.handleEvent(event));
+            firstTokenMillis = Option.some((yield* Clock.currentTimeMillis) - startedAtMillis);
+          if (!selfInterrupted) yield* Effect.sync(() => bridge.handleEvent(event));
           if (
             event.type === "content_block_start" &&
             event.content_block?.type === "tool_use" &&
@@ -431,16 +389,11 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
                 message: `The Claude CLI's stream was inconsistent: ${mismatch}. Retry the request.`,
               });
           }
-          if (
-            event.type === "message_stop" &&
-            sawToolCall &&
-            !selfInterrupted
-          ) {
+          if (event.type === "message_stop" && sawToolCall && !selfInterrupted) {
             // Held open: pi executes the tool while the CLI blocks on
             // `tools/call`. Nothing is written to the CLI, so its cached
             // prefix stays intact.
-            if (process.allowHandoff)
-              return { _tag: "HandedOff" } satisfies TurnEnd;
+            if (process.allowHandoff) return { _tag: "HandedOff" } satisfies TurnEnd;
             // Not held open: ask the CLI to end the turn and wait for the
             // result. pi runs the tool; the next call imports pi's history,
             // tool result included, into a fresh process.
@@ -452,9 +405,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
         if (message._tag === "AssistantMessage") {
           const id = message.id;
           if (Option.isSome(id) && !selfInterrupted)
-            yield* Effect.sync(() =>
-              bridge.recordAssistantBlocks(id.value, message.content),
-            );
+            yield* Effect.sync(() => bridge.recordAssistantBlocks(id.value, message.content));
           continue;
         }
         if (message._tag === "RateLimit") {
@@ -478,12 +429,9 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
         const processTotals = tokenUsageFromModelUsage(result.modelUsage);
         const turnTotals = Option.isSome(processTotals)
           ? subtractTokenUsage(
-            processTotals.value,
-            yield* Ref.getAndSet(
-              process.lastProcessTotals,
               processTotals.value,
-            ),
-          )
+              yield* Ref.getAndSet(process.lastProcessTotals, processTotals.value),
+            )
           : tokenUsageFromClaudeUsage(result.usage);
         // Net of what earlier episodes of this turn already handed to pi.
         const billed = maxTokenUsage(
@@ -539,11 +487,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
       return yield* pool.retireInBackground(process, "interrupted");
     if (Option.isSome(piSessionId) && Option.isSome(config.keepalive)) {
       yield* Ref.set(process.acknowledged, checkpoint);
-      return yield* pool.park(
-        piSessionId.value,
-        process,
-        config.keepalive.value,
-      );
+      return yield* pool.park(piSessionId.value, process, config.keepalive.value);
     }
     return yield* pool.retireInBackground(process, "unparked");
   });
@@ -562,16 +506,12 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     // it is about was that episode's, and nothing more is sent if it was
     // charged to usage credits.
     const earlierRateLimit = yield* process.rateLimit;
-    if (Option.isSome(earlierRateLimit))
-      yield* checkRateLimit(earlierRateLimit.value);
+    if (Option.isSome(earlierRateLimit)) yield* checkRateLimit(earlierRateLimit.value);
 
     const delta = deltaMessages(messages);
     if (mode === "handoff") {
       for (const message of delta.filter(isToolResult))
-        yield* process.answerToolCall(
-          message.toolCallId,
-          mcpToolResultFromPi(message),
-        );
+        yield* process.answerToolCall(message.toolCallId, mcpToolResultFromPi(message));
     } else if (mode === "turn") {
       // A structured process gets the new user message as a fresh import
       // would give it, so a later import of the same history sends the
@@ -581,9 +521,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
           ? structuredReplay(delta, model.id)
           : undefined;
       const last = structuredTurn?.[structuredTurn.length - 1];
-      yield* process.writeUser(
-        last?.kind === "user" ? last.content : replayPiMessages(delta),
-      );
+      yield* process.writeUser(last?.kind === "user" ? last.content : replayPiMessages(delta));
     }
 
     const { end, turnReportedBefore } = yield* readTurn(process);
@@ -593,8 +531,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     if (stopped.stopReason === "error")
       return yield* new ModelStopError({
         stopReason: stopped.rawStopReason ?? "unknown",
-        message:
-          stopped.errorMessage ?? "The model stopped without an answer",
+        message: stopped.errorMessage ?? "The model stopped without an answer",
       });
     // Parked before the fiber exits: `done` is pushed after the exit, so the
     // process is already there when pi issues its next call.
@@ -603,9 +540,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     const output = bridge.getOutput();
     // `toolUse` with no toolCall block would send pi looking for a tool that
     // is not there.
-    const hasToolCall = output.content.some(
-      (block) => block.type === "toolCall",
-    );
+    const hasToolCall = output.content.some((block) => block.type === "toolCall");
     const stopReason: EpisodeEnd["stopReason"] =
       output.stopReason === "toolUse" && hasToolCall
         ? "toolUse"
@@ -637,10 +572,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
         // `error` or `aborted` now.
         const process = yield* Ref.getAndSet(borrowed, Option.none());
         if (Option.isSome(process))
-          yield* pool.retireInBackground(
-            process.value,
-            retireCauseForFailure(exit.cause),
-          );
+          yield* pool.retireInBackground(process.value, retireCauseForFailure(exit.cause));
       }),
     ),
   );

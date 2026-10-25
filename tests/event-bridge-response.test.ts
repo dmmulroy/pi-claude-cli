@@ -4,16 +4,12 @@
  * thinking level, and whether the stream matches the CLI's own record.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 vi.mock("@earendil-works/pi-ai", () => ({ calculateCost: vi.fn() }));
 
 import type { ClaudeApiEvent } from "../src/cli-protocol";
-import {
-  createEventBridge,
-  mapStopReason,
-  RATE_LIMIT_DIAGNOSTIC,
-} from "../src/event-bridge";
+import { createEventBridge, mapStopReason, RATE_LIMIT_DIAGNOSTIC } from "../src/event-bridge";
 
 const model = {
   id: "claude-sonnet-5",
@@ -311,18 +307,9 @@ describe("checking the stream against the CLI's record", () => {
   it.each([
     ["different text", [{ ...recordedText, text: "Writing." }, recordedTool]],
     ["text where a tool call was", [recordedText, recordedText]],
-    [
-      "another tool call id",
-      [recordedText, { ...recordedTool, id: "toolu_2" }],
-    ],
-    [
-      "another tool",
-      [recordedText, { ...recordedTool, name: "mcp__custom-tools__bash" }],
-    ],
-    [
-      "other arguments",
-      [recordedText, { ...recordedTool, input: { path: "b.txt", depth: 1 } }],
-    ],
+    ["another tool call id", [recordedText, { ...recordedTool, id: "toolu_2" }]],
+    ["another tool", [recordedText, { ...recordedTool, name: "mcp__custom-tools__bash" }]],
+    ["other arguments", [recordedText, { ...recordedTool, input: { path: "b.txt", depth: 1 } }]],
     ["a tool call where text was", [recordedTool, recordedTool]],
   ])("reports %s", (_, record) => {
     const bridge = bridgeOf(streamed());
@@ -331,10 +318,7 @@ describe("checking the stream against the CLI's record", () => {
   });
 
   it("leaves arguments that did not arrive as an object to pi", () => {
-    const bridge = bridgeOf([
-      start("msg_1"),
-      ...toolUse(0, "toolu_1", '{"path": "a.t'),
-    ]);
+    const bridge = bridgeOf([start("msg_1"), ...toolUse(0, "toolu_1", '{"path": "a.t')]);
     bridge.recordAssistantBlocks("msg_1", [recordedTool]);
     expect(bridge.streamMismatch()).toBeUndefined();
   });
@@ -347,11 +331,7 @@ describe("checking the stream against the CLI's record", () => {
   });
 
   it("checks the current API message only", () => {
-    const bridge = bridgeOf([
-      ...streamed(),
-      start("msg_2"),
-      ...text(0, "Done."),
-    ]);
+    const bridge = bridgeOf([...streamed(), start("msg_2"), ...text(0, "Done.")]);
     bridge.recordAssistantBlocks("msg_1", [{ type: "text", text: "stale" }]);
     bridge.recordAssistantBlocks("msg_2", [{ type: "text", text: "Done." }]);
     expect(bridge.streamMismatch()).toBeUndefined();

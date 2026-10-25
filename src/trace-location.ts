@@ -31,9 +31,9 @@ const stateHome = Config.option(Config.NonEmptyString("XDG_STATE_HOME")).pipe(
   Effect.orElseSucceed(() => Option.none<string>()),
 );
 
-const traceOverride = Config.option(
-  Config.NonEmptyString("PI_CLAUDE_CLI_TRACE"),
-).pipe(Effect.orElseSucceed(() => Option.none<string>()));
+const traceOverride = Config.option(Config.NonEmptyString("PI_CLAUDE_CLI_TRACE")).pipe(
+  Effect.orElseSucceed(() => Option.none<string>()),
+);
 
 /**
  * The default trace directory: `$XDG_STATE_HOME/pi-claude-cli/traces`, or
@@ -41,9 +41,7 @@ const traceOverride = Config.option(
  */
 export const defaultTraceDirectory = Effect.gen(function* () {
   const path = yield* Path.Path;
-  const state = Option.getOrElse(yield* stateHome, () =>
-    path.join(homedir(), ".local", "state"),
-  );
+  const state = Option.getOrElse(yield* stateHome, () => path.join(homedir(), ".local", "state"));
   return path.join(state, "pi-claude-cli", "traces");
 });
 

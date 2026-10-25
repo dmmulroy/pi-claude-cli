@@ -94,9 +94,7 @@ const nanosToMillis = (nanos: bigint): number => Number(nanos) / 1_000_000;
 const traceJsonReplacer = (_key: string, value: unknown): unknown =>
   typeof value === "bigint" ? value.toString() : value;
 
-const traceSpanLinks = (
-  links: ReadonlyArray<Tracer.SpanLink>,
-): ReadonlyArray<TraceSpanLink> =>
+const traceSpanLinks = (links: ReadonlyArray<Tracer.SpanLink>): ReadonlyArray<TraceSpanLink> =>
   links.map((link) => ({
     traceId: link.span.traceId,
     spanId: link.span.spanId,
@@ -108,9 +106,7 @@ const parentSpanIdOf = (span: Tracer.Span): string | null =>
     onSome: (parent) => parent.spanId,
   });
 
-const traceSpanStatus = (
-  exit: Exit.Exit<unknown, unknown>,
-): TraceSpanStatus => {
+const traceSpanStatus = (exit: Exit.Exit<unknown, unknown>): TraceSpanStatus => {
   if (Exit.isSuccess(exit)) return "ok";
   return Cause.hasInterruptsOnly(exit.cause) ? "interrupted" : "error";
 };
@@ -134,11 +130,9 @@ const traceRecordWriter = (
     try {
       // Synchronous on purpose: a span boundary must be on disk before the
       // process can die, or a leaked span could not be told from a lost line.
-      appendFileSync(
-        pathFor(record.timeMs),
-        JSON.stringify(record, traceJsonReplacer) + "\n",
-        { mode: TRACE_FILE_MODE },
-      );
+      appendFileSync(pathFor(record.timeMs), JSON.stringify(record, traceJsonReplacer) + "\n", {
+        mode: TRACE_FILE_MODE,
+      });
     } catch {
       writable = false;
     }
@@ -155,9 +149,7 @@ export const recordSpanEvent = (
   attributes: Record<string, unknown>,
 ): Effect.Effect<void> =>
   Effect.clockWith((clock) =>
-    Effect.sync(() =>
-      span.event(name, clock.currentTimeNanosUnsafe(), attributes),
-    ),
+    Effect.sync(() => span.event(name, clock.currentTimeNanosUnsafe(), attributes)),
   );
 
 /** A native span that also reports its start, events and end to the file. */
@@ -182,11 +174,7 @@ class FileTraceSpan extends Tracer.NativeSpan {
     });
   }
 
-  override event(
-    name: string,
-    startTime: bigint,
-    attributes?: Record<string, unknown>,
-  ): void {
+  override event(name: string, startTime: bigint, attributes?: Record<string, unknown>): void {
     super.event(name, startTime, attributes);
     this.writeRecord({
       kind: "event",
@@ -238,8 +226,7 @@ const pruneTraceDirectory = Effect.fn("Tracing.pruneTraceDirectory")(
   function* (directory: string) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const cutoff =
-      (yield* Clock.currentTimeMillis) - TRACE_RETENTION_DAYS * MILLIS_PER_DAY;
+    const cutoff = (yield* Clock.currentTimeMillis) - TRACE_RETENTION_DAYS * MILLIS_PER_DAY;
     const names = yield* fs.readDirectory(directory);
     let removed = 0;
     for (const name of names) {
@@ -259,9 +246,9 @@ const pruneTraceDirectory = Effect.fn("Tracing.pruneTraceDirectory")(
 );
 
 /** Create the private daily directory and drop expired files. */
-const prepareDailyTraceDirectory = Effect.fn(
-  "Tracing.prepareDailyTraceDirectory",
-)(function* (directory: string) {
+const prepareDailyTraceDirectory = Effect.fn("Tracing.prepareDailyTraceDirectory")(function* (
+  directory: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const runs = path.join(directory, "runs");
@@ -286,18 +273,14 @@ const tracerLayerFor = (target: TraceTarget) =>
           fileTracer(() => target.path),
         );
       case "TraceDaily": {
-        const prepared = yield* prepareDailyTraceDirectory(
-          target.directory,
-        ).pipe(
+        const prepared = yield* prepareDailyTraceDirectory(target.directory).pipe(
           Effect.as(true),
           Effect.catchTag("PlatformError", () => Effect.succeed(false)),
         );
         if (!prepared) return Layer.empty;
         return Layer.succeed(
           Tracer.Tracer,
-          fileTracer((timeMillis) =>
-            path.join(target.directory, dailyTraceFileName(timeMillis)),
-          ),
+          fileTracer((timeMillis) => path.join(target.directory, dailyTraceFileName(timeMillis))),
         );
       }
     }

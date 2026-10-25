@@ -30,10 +30,7 @@ import {
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import {
-  nodeChildProcessSpawnerLayer,
-  nodeFileSystemLayer,
-} from "../src/node-platform.ts";
+import { nodeChildProcessSpawnerLayer, nodeFileSystemLayer } from "../src/node-platform.ts";
 import {
   defaultTraceDirectory,
   resolveTraceTarget,
@@ -94,10 +91,7 @@ class TracedCommandFailed extends Data.TaggedError("TracedCommandFailed")<{
 // ---- which file -------------------------------------------------------------
 
 const sourceFlags = {
-  file: Flag.String("file").pipe(
-    Flag.withDescription("Trace file to read"),
-    Flag.optional,
-  ),
+  file: Flag.String("file").pipe(Flag.withDescription("Trace file to read"), Flag.optional),
   run: Flag.Boolean("run").pipe(
     Flag.withDescription("Read the file of the most recent `trace run`"),
     Flag.withDefault(false),
@@ -110,9 +104,7 @@ interface TraceSource {
 }
 
 /** The most recently written `.ndjson` file in a directory. */
-const newestTraceFile = Effect.fn("TraceCli.newestTraceFile")(function* (
-  directory: string,
-) {
+const newestTraceFile = Effect.fn("TraceCli.newestTraceFile")(function* (directory: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const names = yield* fs
@@ -127,8 +119,7 @@ const newestTraceFile = Effect.fn("TraceCli.newestTraceFile")(function* (
       onNone: () => 0,
       onSome: (date) => date.getTime(),
     });
-    if (Option.isNone(newest) || at > newest.value.at)
-      newest = Option.some({ file, at });
+    if (Option.isNone(newest) || at > newest.value.at) newest = Option.some({ file, at });
   }
   if (Option.isNone(newest))
     return yield* new TraceUsageError({
@@ -137,9 +128,7 @@ const newestTraceFile = Effect.fn("TraceCli.newestTraceFile")(function* (
   return newest.value.file;
 });
 
-const resolveTraceFile = Effect.fn("TraceCli.resolveTraceFile")(function* (
-  source: TraceSource,
-) {
+const resolveTraceFile = Effect.fn("TraceCli.resolveTraceFile")(function* (source: TraceSource) {
   const path = yield* Path.Path;
   if (Option.isSome(source.file)) return path.resolve(source.file.value);
   if (source.run) return yield* newestTraceFile(yield* traceRunDirectory);
@@ -148,9 +137,7 @@ const resolveTraceFile = Effect.fn("TraceCli.resolveTraceFile")(function* (
   return yield* newestTraceFile(yield* defaultTraceDirectory);
 });
 
-const loadTraceFile = Effect.fn("TraceCli.loadTraceFile")(function* (
-  file: string,
-) {
+const loadTraceFile = Effect.fn("TraceCli.loadTraceFile")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   const text = yield* fs.readFileString(file).pipe(
     Effect.catchTag("PlatformError", (error) =>
@@ -164,9 +151,7 @@ const loadTraceFile = Effect.fn("TraceCli.loadTraceFile")(function* (
   return foldTraceRecords(parseTraceRecords(text));
 });
 
-const loadTrace = Effect.fn("TraceCli.loadTrace")(function* (
-  source: TraceSource,
-) {
+const loadTrace = Effect.fn("TraceCli.loadTrace")(function* (source: TraceSource) {
   const file = yield* resolveTraceFile(source);
   return { file, model: yield* loadTraceFile(file) };
 });
@@ -220,10 +205,7 @@ interface SelectorInput {
   readonly trace: Option.Option<string>;
 }
 
-const selectorPredicate = (
-  input: SelectorInput,
-  model: TraceModel,
-): TraceSpanPredicate => {
+const selectorPredicate = (input: SelectorInput, model: TraceModel): TraceSpanPredicate => {
   const tests: ReadonlyArray<TraceSpanPredicate> = [
     ...Option.toArray(input.name).map(traceNamePredicate),
     ...Option.toArray(input.status).map(
@@ -294,11 +276,9 @@ const treeCommand = Command.make(
       ? model.roots.slice(-1)
       : Option.match(input.traceId, {
           onNone: () => model.roots,
-          onSome: (prefix) =>
-            model.roots.filter((root) => root.traceId.startsWith(prefix)),
+          onSome: (prefix) => model.roots.filter((root) => root.traceId.startsWith(prefix)),
         });
-    if (roots.length === 0)
-      return yield* new TraceUsageError({ message: "no matching trace" });
+    if (roots.length === 0) return yield* new TraceUsageError({ message: "no matching trace" });
     yield* Console.log(
       renderTraceTrees(roots, model, {
         color: yield* colorEnabled,
@@ -336,11 +316,7 @@ const lsCommand = Command.make(
       );
     }
   }),
-).pipe(
-  Command.withDescription(
-    "One line per trace: root span, start, duration, status",
-  ),
-);
+).pipe(Command.withDescription("One line per trace: root span, start, duration, status"));
 
 /** The on-disk form of a span, for `spans --json`. */
 const traceSpanJson = (span: TraceSpan) => ({
@@ -400,16 +376,10 @@ const openCommand = Command.make(
     };
     return yield* new TraceCheckFailed({
       file,
-      failures: open.map(
-        (span) => `open span: ${formatTraceSpanLine(span, model, options)}`,
-      ),
+      failures: open.map((span) => `open span: ${formatTraceSpanLine(span, model, options)}`),
     });
   }),
-).pipe(
-  Command.withDescription(
-    "Spans that started and never ended; exits 1 when there are any",
-  ),
-);
+).pipe(Command.withDescription("Spans that started and never ended; exits 1 when there are any"));
 
 const statsCommand = Command.make(
   "stats",
@@ -441,10 +411,7 @@ const statsCommand = Command.make(
       ];
     });
     yield* Console.log(
-      renderTraceTable([
-        ["name", "count", "p50", "max", "error", "intr", "open"],
-        ...rows,
-      ]),
+      renderTraceTable([["name", "count", "p50", "max", "error", "intr", "open"], ...rows]),
     );
   }),
 ).pipe(Command.withDescription("Count, p50 and max duration by span name"));
@@ -470,9 +437,7 @@ const matchedSpanFailures = (
 ): ReadonlyArray<string> => {
   const failures: Array<string> = [];
   const hasCountCheck =
-    Option.isSome(checks.count) ||
-    Option.isSome(checks.minCount) ||
-    Option.isSome(checks.maxCount);
+    Option.isSome(checks.count) || Option.isSome(checks.minCount) || Option.isSome(checks.maxCount);
   if (!hasCountCheck && matched.length === 0)
     failures.push(`expected a span with ${what}, found none`);
   if (Option.isSome(checks.count) && matched.length !== checks.count.value)
@@ -495,8 +460,7 @@ const matchedSpanFailures = (
     if (Option.isSome(checks.minMs) && duration < checks.minMs.value)
       failures.push(`${label}, under --min-ms ${checks.minMs.value}`);
   }
-  const valuesOf = (key: string) =>
-    matched.map((span) => readTraceAttribute(span, key));
+  const valuesOf = (key: string) => matched.map((span) => readTraceAttribute(span, key));
   const show = (values: ReadonlyArray<Option.Option<string>>) =>
     JSON.stringify(values.map(Option.getOrNull));
   if (Option.isSome(checks.same)) {
@@ -519,10 +483,7 @@ const matchedSpanFailures = (
 };
 
 /** Failures of `--order`: each selector must match at or after the one before. */
-const orderFailures = (
-  order: string,
-  model: TraceModel,
-): ReadonlyArray<string> => {
+const orderFailures = (order: string, model: TraceModel): ReadonlyArray<string> => {
   let after = Number.NEGATIVE_INFINITY;
   let previous = "the start of the trace";
   for (const selector of splitTraceSelectors(order).map(parseTraceSelector)) {
@@ -615,8 +576,7 @@ const assertCommand = Command.make(
         onSome: (order) => orderFailures(order, model),
       }),
     ];
-    if (failures.length > 0)
-      return yield* new TraceCheckFailed({ failures, file });
+    if (failures.length > 0) return yield* new TraceCheckFailed({ failures, file });
     if (!input.quiet) yield* Console.log("trace assert ok");
   }),
 ).pipe(Command.withDescription("Exit non-zero unless the trace matches"));
@@ -658,9 +618,7 @@ const tailCommand = Command.make(
             }),
           );
         }
-        yield* Console.log(
-          formatTraceRecordLine(record, depths.get(record.spanId) ?? 0, color),
-        );
+        yield* Console.log(formatTraceRecordLine(record, depths.get(record.spanId) ?? 0, color));
       }
     }).pipe(Effect.catchTag("PlatformError", () => Effect.void));
     yield* drain.pipe(Effect.repeat(Schedule.spaced(TAIL_POLL_INTERVAL)));
@@ -700,10 +658,7 @@ const runCommand = Command.make(
           const stamp = new Date(yield* Clock.currentTimeMillis)
             .toISOString()
             .replace(/[:.]/g, "-");
-          return path.join(
-            yield* traceRunDirectory,
-            `${stamp}-${process.pid}.ndjson`,
-          );
+          return path.join(yield* traceRunDirectory, `${stamp}-${process.pid}.ndjson`);
         }),
     });
     yield* fs.makeDirectory(path.dirname(file), {
@@ -749,8 +704,7 @@ const runCommand = Command.make(
             }),
       );
     }
-    if (exitCode !== 0)
-      return yield* new TracedCommandFailed({ exitCode: Number(exitCode) });
+    if (exitCode !== 0) return yield* new TracedCommandFailed({ exitCode: Number(exitCode) });
   }),
 ).pipe(
   Command.withDescription(
@@ -782,9 +736,7 @@ const traceCliLayer = Layer.mergeAll(
 );
 
 const main = Command.run(traceCommand, { version: "1" }).pipe(
-  Effect.tapErrorTag("TraceUsageError", (error) =>
-    Console.error(`trace: ${error.message}`),
-  ),
+  Effect.tapErrorTag("TraceUsageError", (error) => Console.error(`trace: ${error.message}`)),
   Effect.tapErrorTag("TraceCheckFailed", (error) =>
     Console.error(
       [

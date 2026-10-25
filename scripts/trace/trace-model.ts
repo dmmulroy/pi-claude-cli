@@ -51,9 +51,7 @@ const TraceRecord = Schema.Union([
 /** One decoded line of a trace file. */
 export type TraceRecord = typeof TraceRecord.Type;
 
-const decodeTraceRecordLine = Schema.decodeUnknownOption(
-  Schema.fromJsonString(TraceRecord),
-);
+const decodeTraceRecordLine = Schema.decodeUnknownOption(Schema.fromJsonString(TraceRecord));
 
 /**
  * Decode the lines of a trace file. Lines that are not records are skipped:
@@ -113,9 +111,7 @@ export interface TraceModel {
 }
 
 /** Fold records into spans. Events of a span with no start record are dropped. */
-export const foldTraceRecords = (
-  records: ReadonlyArray<TraceRecord>,
-): TraceModel => {
+export const foldTraceRecords = (records: ReadonlyArray<TraceRecord>): TraceModel => {
   const byId = new Map<string, TraceSpan>();
   let lastMs = 0;
   for (const record of records) {
@@ -202,10 +198,7 @@ export const traceSpanStatus = (span: TraceSpan): TraceSpanStatus =>
   });
 
 /** A span's duration; an open span is measured up to the newest record. */
-export const traceSpanDurationMs = (
-  span: TraceSpan,
-  model: TraceModel,
-): number =>
+export const traceSpanDurationMs = (span: TraceSpan, model: TraceModel): number =>
   Option.match(span.end, {
     onNone: () => model.lastMs - span.startMs,
     onSome: (end) => end.durMs,
@@ -230,12 +223,8 @@ export const traceAttributeText = (value: unknown): string =>
  * Read an attribute as text. `pid` falls back to the pi process that wrote
  * the span when the span carries no `pid` attribute of its own.
  */
-export const readTraceAttribute = (
-  span: TraceSpan,
-  key: string,
-): Option.Option<string> => {
-  if (key in span.attributes)
-    return Option.some(traceAttributeText(span.attributes[key]));
+export const readTraceAttribute = (span: TraceSpan, key: string): Option.Option<string> => {
+  if (key in span.attributes) return Option.some(traceAttributeText(span.attributes[key]));
   return key === "pid" ? Option.some(String(span.pid)) : Option.none();
 };
 
@@ -243,9 +232,7 @@ export const readTraceAttribute = (
 export type TraceSpanPredicate = (span: TraceSpan) => boolean;
 
 const globPattern = (glob: string): RegExp =>
-  new RegExp(
-    `^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`,
-  );
+  new RegExp(`^${glob.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*")}$`);
 
 /** Span name test; `*` matches any run of characters. */
 export const traceNamePredicate = (glob: string): TraceSpanPredicate => {
@@ -263,26 +250,18 @@ export const traceEventPredicate = (glob: string): TraceSpanPredicate => {
  * Attribute test from `k=v`, `k!=v`, `k~regex`, bare `k` (present) or `!k`
  * (absent).
  */
-export const traceAttributePredicate = (
-  expression: string,
-): TraceSpanPredicate => {
+export const traceAttributePredicate = (expression: string): TraceSpanPredicate => {
   if (expression.startsWith("!")) {
     const key = expression.slice(1);
     return (span) => Option.isNone(readTraceAttribute(span, key));
   }
   const match = /^([^=!~]+)(!=|=|~)(.*)$/s.exec(expression);
-  if (match === null)
-    return (span) => Option.isSome(readTraceAttribute(span, expression));
+  if (match === null) return (span) => Option.isSome(readTraceAttribute(span, expression));
   const [, key = "", operator, value = ""] = match;
-  if (operator === "=")
-    return (span) => Option.contains(readTraceAttribute(span, key), value);
-  if (operator === "!=")
-    return (span) => !Option.contains(readTraceAttribute(span, key), value);
+  if (operator === "=") return (span) => Option.contains(readTraceAttribute(span, key), value);
+  if (operator === "!=") return (span) => !Option.contains(readTraceAttribute(span, key), value);
   const pattern = new RegExp(value);
-  return (span) =>
-    Option.exists(readTraceAttribute(span, key), (actual) =>
-      pattern.test(actual),
-    );
+  return (span) => Option.exists(readTraceAttribute(span, key), (actual) => pattern.test(actual));
 };
 
 /** A parsed `name[k=v,...]` selector, optionally ordered by `:end`. */
@@ -307,8 +286,7 @@ export const parseTraceSelector = (text: string): TraceSelector => {
   return {
     text,
     orderBy: suffix?.[1] === "end" ? "end" : "start",
-    matches: (span) =>
-      nameMatches(span) && attributes.every((test) => test(span)),
+    matches: (span) => nameMatches(span) && attributes.every((test) => test(span)),
   };
 };
 
@@ -336,9 +314,7 @@ export const traceAncestorPredicate = (
 ): TraceSpanPredicate => {
   const hasAncestor = (span: TraceSpan): boolean =>
     Option.match(
-      Option.flatMap(span.parentSpanId, (id) =>
-        Option.fromUndefinedOr(model.byId.get(id)),
-      ),
+      Option.flatMap(span.parentSpanId, (id) => Option.fromUndefinedOr(model.byId.get(id))),
       {
         onNone: () => false,
         onSome: (parent) => selector.matches(parent) || hasAncestor(parent),

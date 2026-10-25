@@ -11,14 +11,7 @@
  *
  * Runs only with PI_OWNED_LIVE=1 and an authenticated Claude Code.
  */
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import http from "node:http";
 import https from "node:https";
@@ -26,7 +19,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 
 interface WireRequest {
   model: string;
@@ -128,8 +121,7 @@ const adaptive =
     expect(r.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(r.effort).toBe(effort);
   };
-const disabled: Expect = (r) =>
-  expect(r.thinking).toEqual({ type: "disabled" });
+const disabled: Expect = (r) => expect(r.thinking).toEqual({ type: "disabled" });
 
 const MODELS: Array<{
   id: string;
@@ -171,9 +163,7 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")(
         const proxy = await startProxy();
         const spawns = spawnCounter(dir, proxy.url);
         const client = new RpcClient({
-          cliPath: resolve(
-            "node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
-          ),
+          cliPath: resolve("node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
           cwd: dir,
           env: {
             PI_CODING_AGENT_DIR: join(dir, "agent"),
@@ -221,9 +211,7 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")(
             const thoughts = messages
               .filter((m: any) => m.role === "assistant")
               .flatMap((m: any) =>
-                m.content.filter(
-                  (b: any) => b.type === "thinking" && b.thinking?.trim(),
-                ),
+                m.content.filter((b: any) => b.type === "thinking" && b.thinking?.trim()),
               );
             expect(thoughts.length).toBeGreaterThan(0);
           }
@@ -251,9 +239,7 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")(
       const proxy = await startProxy();
       const spawns = spawnCounter(dir, proxy.url);
       const client = new RpcClient({
-        cliPath: resolve(
-          "node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
-        ),
+        cliPath: resolve("node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
         cwd: dir,
         env: {
           PI_CODING_AGENT_DIR: join(dir, "agent"),

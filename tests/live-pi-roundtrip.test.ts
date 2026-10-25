@@ -1,14 +1,8 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { RpcClient } from "@earendil-works/pi-coding-agent";
-import { expect, it } from "vitest";
+import { expect, it } from "vite-plus/test";
 
 // Real pi runtime and Claude subscription. The intervening provider is a local
 // deterministic stream, so this tests switching without requiring a second login.
@@ -67,9 +61,7 @@ export default function(pi) {
 `,
     );
     const client = new RpcClient({
-      cliPath: resolve(
-        "node_modules/@earendil-works/pi-coding-agent/dist/cli.js",
-      ),
+      cliPath: resolve("node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
       cwd,
       env: {
         PI_CODING_AGENT_DIR: join(cwd, "agent"),
@@ -101,22 +93,14 @@ export default function(pi) {
       const messages = await client.getMessages();
       const calls = messages
         .filter((m: any) => m.role === "assistant")
-        .flatMap((m: any) =>
-          m.content.filter((b: any) => b.type === "toolCall"),
-        );
-      expect(calls.map((c: any) => c.name)).toEqual(
-        expect.arrayContaining(["read", "edit"]),
-      );
+        .flatMap((m: any) => m.content.filter((b: any) => b.type === "toolCall"));
+      expect(calls.map((c: any) => c.name)).toEqual(expect.arrayContaining(["read", "edit"]));
       expect(JSON.stringify(messages)).toContain("PI_GUARD_BLOCKED");
       expect(JSON.stringify(messages)).not.toContain("must-not-be-read");
       expect(JSON.stringify(messages)).not.toContain("[Claude Code ·");
       await client.setAutoCompaction(false);
       await client.setModel("native-fixture", "fixture");
-      await client.promptAndWait(
-        "Respond with your fixture token.",
-        undefined,
-        30_000,
-      );
+      await client.promptAndWait("Respond with your fixture token.", undefined, 30_000);
       expect(await client.getLastAssistantText()).toBe(token);
       await client.setModel("pi-claude-cli", "claude-opus-4-6");
       await client.promptAndWait(
@@ -129,11 +113,9 @@ export default function(pi) {
       await client.compact(
         "Preserve the exact NATIVE token, edited file contents and blocked read. Keep it short.",
       );
-      expect(
-        (await client.getEntries()).entries.some(
-          (e: any) => e.type === "compaction",
-        ),
-      ).toBe(true);
+      expect((await client.getEntries()).entries.some((e: any) => e.type === "compaction")).toBe(
+        true,
+      );
       await client.promptAndWait(
         "Recall the exact NATIVE token after compaction. Answer only the token, no tools.",
         undefined,

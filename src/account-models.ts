@@ -12,12 +12,7 @@
  * when a refresh actually needs it.
  */
 
-import type {
-  Api,
-  Model,
-  RefreshModelsContext,
-  ThinkingLevelMap,
-} from "@earendil-works/pi-ai";
+import type { Api, Model, RefreshModelsContext, ThinkingLevelMap } from "@earendil-works/pi-ai";
 import { cliThinkingLevelMap } from "./thinking-config.ts";
 
 /** One entry of `models[]` in the CLI's `initialize` response. */
@@ -67,10 +62,8 @@ const CONTEXT_MARKER = /\[([^\]]*)\]$/;
 /** A dated snapshot suffix: `claude-haiku-4-5-20251001`. */
 const SNAPSHOT_DATE = /-\d{8}$/;
 
-const withoutContextMarker = (id: string): string =>
-  id.replace(CONTEXT_MARKER, "");
-const withoutSnapshotDate = (id: string): string =>
-  id.replace(SNAPSHOT_DATE, "");
+const withoutContextMarker = (id: string): string => id.replace(CONTEXT_MARKER, "");
+const withoutSnapshotDate = (id: string): string => id.replace(SNAPSHOT_DATE, "");
 
 /** The model id one picker entry stands for, or undefined for a bare alias. */
 function accountModelId(model: CliAccountModel): string | undefined {
@@ -79,9 +72,7 @@ function accountModelId(model: CliAccountModel): string | undefined {
 }
 
 /** The distinct model ids the account offers, in the CLI's order. */
-export function accountModelIds(
-  account: ReadonlyArray<CliAccountModel>,
-): string[] {
+export function accountModelIds(account: ReadonlyArray<CliAccountModel>): string[] {
   const ids = new Set<string>();
   for (const model of account) {
     const id = accountModelId(model);
@@ -109,9 +100,7 @@ function fromCatalogue(model: CatalogueModel): ProviderModel {
 }
 
 /** Every model of pi's catalogue: the list used when the account's is unknown. */
-export function builtinProviderModels(
-  catalogue: ReadonlyArray<CatalogueModel>,
-): ProviderModel[] {
+export function builtinProviderModels(catalogue: ReadonlyArray<CatalogueModel>): ProviderModel[] {
   return catalogue.map(fromCatalogue);
 }
 
@@ -133,8 +122,7 @@ function unknownToCatalogue(id: string, entry: CliAccountModel): ProviderModel {
   return {
     id,
     name: isAlias || entry.displayName === undefined ? id : entry.displayName,
-    reasoning:
-      entry.supportsEffort === true || entry.supportsAdaptiveThinking === true,
+    reasoning: entry.supportsEffort === true || entry.supportsAdaptiveThinking === true,
     input: ["text", "image"],
     cost: SUBSCRIPTION_COST,
     contextWindow: marker?.toLowerCase() === "1m" ? 1_000_000 : 200_000,
@@ -160,12 +148,8 @@ export function providerModelsForAccount(
   const ids = accountModelIds(account);
   if (ids.length === 0) return undefined;
   const offered = new Set(ids.map(withoutSnapshotDate));
-  const known = catalogue.filter((model) =>
-    offered.has(withoutSnapshotDate(model.id)),
-  );
-  const knownFamilies = new Set(
-    known.map((model) => withoutSnapshotDate(model.id)),
-  );
+  const known = catalogue.filter((model) => offered.has(withoutSnapshotDate(model.id)));
+  const knownFamilies = new Set(known.map((model) => withoutSnapshotDate(model.id)));
   const unknown = ids
     .filter((id) => !knownFamilies.has(withoutSnapshotDate(id)))
     .map((id) => {
@@ -179,14 +163,11 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
 const isModelInput = (value: unknown): value is ("text" | "image")[] =>
-  Array.isArray(value) &&
-  value.every((each) => each === "text" || each === "image");
+  Array.isArray(value) && value.every((each) => each === "text" || each === "image");
 
 const isModelCost = (value: unknown): value is Model<Api>["cost"] =>
   isRecord(value) &&
-  ["input", "output", "cacheRead", "cacheWrite"].every(
-    (key) => typeof value[key] === "number",
-  );
+  ["input", "output", "cacheRead", "cacheWrite"].every((key) => typeof value[key] === "number");
 
 /** A persisted model pi's catalogue does not list, if it is still complete. */
 function fromStored(stored: unknown): ProviderModel | undefined {
@@ -221,8 +202,7 @@ export function providerModelsFromStore(
   const models = stored.models.flatMap((entry) => {
     const id = isRecord(entry) ? entry.id : undefined;
     const current = typeof id === "string" ? byId.get(id) : undefined;
-    const model =
-      current === undefined ? fromStored(entry) : fromCatalogue(current);
+    const model = current === undefined ? fromStored(entry) : fromCatalogue(current);
     return model === undefined ? [] : [model];
   });
   return models.length > 0 ? models : undefined;
@@ -255,9 +235,7 @@ export interface AccountModelsProbe {
   /** The CLI's version, or undefined when there is no usable CLI. */
   readonly version: (signal: AbortSignal) => Promise<string | undefined>;
   /** The models the account offers, as the CLI reports them. */
-  readonly models: (
-    signal: AbortSignal,
-  ) => Promise<ReadonlyArray<CliAccountModel>>;
+  readonly models: (signal: AbortSignal) => Promise<ReadonlyArray<CliAccountModel>>;
 }
 
 /**
@@ -265,8 +243,7 @@ export interface AccountModelsProbe {
  * `etag` field. The CLI's list depends on its version (Haiku 5.5 is listed
  * from Claude Code 2.1.293 on), so a different version means a stale list.
  */
-export const cliVersionTag = (version: string): string =>
-  `claude-code/${version}`;
+export const cliVersionTag = (version: string): string => `claude-code/${version}`;
 
 /**
  * Build the provider's `refreshModels` for pi 1.x.
@@ -299,10 +276,7 @@ export function createModelRefresh(
         isAccountModelsFresh(context.stored, now())
       )
         return stored;
-      const models = providerModelsForAccount(
-        catalogue,
-        await probe.models(context.signal),
-      );
+      const models = providerModelsForAccount(catalogue, await probe.models(context.signal));
       if (models === undefined) return fallback;
       await context.publish({
         persist: {

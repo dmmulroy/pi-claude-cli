@@ -61,11 +61,7 @@ import {
   mcpToolCallResponse,
   mcpToolErrorResult,
 } from "./mcp-inband.ts";
-import {
-  type CliThinking,
-  type ThinkingControl,
-  thinkingControls,
-} from "./thinking-config.ts";
+import { type CliThinking, type ThinkingControl, thinkingControls } from "./thinking-config.ts";
 import { isHandoffClaudeTool, mapClaudeToolNameToPi } from "./tool-mapping.ts";
 import type { CliReplayFrame } from "./pi-context.ts";
 import { recordSpanEvent } from "./tracing.ts";
@@ -196,18 +192,11 @@ export interface IClaudeProcess {
    * mid-turn included. False means the CLI did not ask for the new list; the
    * caller spawns instead.
    */
-  readonly applyTools: (
-    desired: ReadonlyArray<McpToolDefinition>,
-  ) => Effect.Effect<boolean>;
+  readonly applyTools: (desired: ReadonlyArray<McpToolDefinition>) => Effect.Effect<boolean>;
   /** True when pi's results for exactly these tool calls can continue the turn. */
-  readonly awaitsToolCalls: (
-    toolUseIds: ReadonlyArray<string>,
-  ) => Effect.Effect<boolean>;
+  readonly awaitsToolCalls: (toolUseIds: ReadonlyArray<string>) => Effect.Effect<boolean>;
   /** Deliver pi's result; answers the CLI now or when its `tools/call` arrives. */
-  readonly answerToolCall: (
-    toolUseId: string,
-    result: McpToolResult,
-  ) => Effect.Effect<void>;
+  readonly answerToolCall: (toolUseId: string, result: McpToolResult) => Effect.Effect<void>;
   /** End the process for good and release everything it owns. Idempotent. */
   readonly retire: (cause: RetireCause) => Effect.Effect<void>;
   /** Completes once `retire` has finished. */
@@ -238,10 +227,8 @@ const IMPORT_HOLD_TIMEOUT = Duration.seconds(20);
 /** How long stdout EOF waits for the exit code and the last of stderr. */
 const EXIT_REPORT_GRACE = Duration.millis(500);
 
-const TOOL_EXECUTION_DENIED_MESSAGE =
-  "Tool execution is unavailable in this environment.";
-const UNMATCHED_CALL_MESSAGE =
-  "pi could not match this tool call to an assistant tool_use block";
+const TOOL_EXECUTION_DENIED_MESSAGE = "Tool execution is unavailable in this environment.";
+const UNMATCHED_CALL_MESSAGE = "pi could not match this tool call to an assistant tool_use block";
 
 /** One `tool_use` block the model streamed and pi is expected to answer. */
 interface ExpectedToolCall {
@@ -298,9 +285,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
    * whatever is left before the CLI is asked to exit.
    */
   const openCalls = yield* FiberMap.make<JsonRpcId>();
-  const controlWaiters = yield* Ref.make(
-    HashMap.empty<string, Deferred.Deferred<boolean>>(),
-  );
+  const controlWaiters = yield* Ref.make(HashMap.empty<string, Deferred.Deferred<boolean>>());
   const controlSequence = yield* Ref.make(0);
   const retiring = yield* Ref.make(false);
   const retired = yield* Deferred.make<void>();
@@ -311,9 +296,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
    * Completed with true by the empty `result` that confirms it, and with
    * false by anything that shows the CLI is answering it instead.
    */
-  const heldMessage = yield* Ref.make(
-    Option.none<Deferred.Deferred<boolean>>(),
-  );
+  const heldMessage = yield* Ref.make(Option.none<Deferred.Deferred<boolean>>());
   const settleHeldMessage = (taken: boolean) =>
     Effect.gen(function* () {
       const held = yield* Ref.getAndSet(heldMessage, Option.none());
@@ -351,11 +334,8 @@ const startClaudeProcess = Effect.fnUntraced(function* (
         yield* Deferred.succeed(call.result, mcpToolErrorResult(message));
     });
 
-  const respondToToolCall = (
-    requestId: string,
-    id: JsonRpcId,
-    result: McpToolResult,
-  ) => write(mcpResponseLine(requestId, mcpToolCallResponse(id, result)));
+  const respondToToolCall = (requestId: string, id: JsonRpcId, result: McpToolResult) =>
+    write(mcpResponseLine(requestId, mcpToolCallResponse(id, result)));
 
   /**
    * The model's `tools/call`. It must name a `tool_use` block this process
@@ -374,8 +354,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     const refuse = (message: string) =>
       respondToToolCall(requestId, id, mcpToolErrorResult(message));
     if (Option.isNone(call)) return yield* refuse("malformed tool call");
-    if (!launch.allowHandoff)
-      return yield* refuse(TOOL_EXECUTION_DENIED_MESSAGE);
+    if (!launch.allowHandoff) return yield* refuse(TOOL_EXECUTION_DENIED_MESSAGE);
     const calls = yield* Ref.get(expected);
     // No id tag: fall back to the single awaited call if that is unambiguous.
     const toolUseId = Option.orElse(call.value.toolUseId, () =>
@@ -412,22 +391,17 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   ) {
     const action = mcpServerAction(
       message.message,
-      message.serverName === INBAND_MCP_SERVER_NAME
-        ? yield* Ref.get(tools)
-        : [],
+      message.serverName === INBAND_MCP_SERVER_NAME ? yield* Ref.get(tools) : [],
     );
     switch (action._tag) {
       case "ListTools": {
         yield* write(mcpResponseLine(message.requestId, action.response));
         const waiting = yield* Ref.getAndSet(toolsRelisted, Option.none());
-        if (Option.isSome(waiting))
-          yield* Deferred.succeed(waiting.value, undefined);
+        if (Option.isSome(waiting)) yield* Deferred.succeed(waiting.value, undefined);
         return;
       }
       case "Respond":
-        return yield* write(
-          mcpResponseLine(message.requestId, action.response),
-        );
+        return yield* write(mcpResponseLine(message.requestId, action.response));
       case "Acknowledge":
         return yield* write(mcpNotificationAckLine(message.requestId));
       case "CancelCall": {
@@ -446,10 +420,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     switch (message._tag) {
       case "ControlResponse": {
         // The answer to a control request of ours goes to whoever sent it.
-        const waiter = HashMap.get(
-          yield* Ref.get(controlWaiters),
-          message.requestId,
-        );
+        const waiter = HashMap.get(yield* Ref.get(controlWaiters), message.requestId);
         if (Option.isNone(waiter)) return yield* Queue.offer(inbox, message);
         return yield* Deferred.succeed(waiter.value, message.success);
       }
@@ -494,9 +465,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
         // that retires the process on it does not interrupt a finished turn.
         yield* endTurn;
         yield* Queue.offer(inbox, message);
-        return yield* failExpectedToolCalls(
-          "the turn ended before pi delivered this result.",
-        );
+        return yield* failExpectedToolCalls("the turn ended before pi delivered this result.");
       case "RateLimit":
         yield* Ref.set(
           rateLimit,
@@ -515,9 +484,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   const stderrReader = yield* handle.stderr.pipe(
     Stream.decodeText(),
     Stream.runForEach((chunk) =>
-      Ref.update(stderrTail, (tail) =>
-        (tail + chunk).slice(-STDERR_TAIL_LIMIT_CHARS),
-      ),
+      Ref.update(stderrTail, (tail) => (tail + chunk).slice(-STDERR_TAIL_LIMIT_CHARS)),
     ),
     Effect.ignore,
     Effect.forkScoped,
@@ -531,9 +498,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
       Effect.timeoutOption(EXIT_REPORT_GRACE),
       Effect.map(Option.flatten),
     );
-    yield* Fiber.await(stderrReader).pipe(
-      Effect.timeoutOption(EXIT_REPORT_GRACE),
-    );
+    yield* Fiber.await(stderrReader).pipe(Effect.timeoutOption(EXIT_REPORT_GRACE));
     yield* Ref.set(alive, false);
     yield* endTurn;
     yield* settleHeldMessage(false);
@@ -560,8 +525,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     Stream.runForEach((line) =>
       Effect.gen(function* () {
         yield* Ref.set(lastOutputAt, yield* Clock.currentTimeMillis);
-        if (launch.traceRawWire)
-          yield* recordSpanEvent(span, "wire raw", { line });
+        if (launch.traceRawWire) yield* recordSpanEvent(span, "wire raw", { line });
         const message = decodeCliLine(line);
         if (Option.isSome(message)) yield* handleMessage(message.value);
       }),
@@ -606,9 +570,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   // abandoned, not answered, by the process that is going away.
   yield* Effect.addFinalizer(() => FiberMap.clear(openCalls));
 
-  const closeScope = Effect.fn("ClaudeProcess.retire")(function* (
-    cause: RetireCause,
-  ) {
+  const closeScope = Effect.fn("ClaudeProcess.retire")(function* (cause: RetireCause) {
     yield* Effect.annotateCurrentSpan({ cause, pid });
     yield* Ref.set(killWithoutGrace, cause === "timeout");
     yield* Scope.close(scope, Exit.void);
@@ -619,17 +581,14 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   /** The first call closes the scope; every later one waits for it. */
   const retire = (cause: RetireCause): Effect.Effect<void> =>
     Effect.gen(function* () {
-      if (yield* Ref.getAndSet(retiring, true))
-        return yield* Deferred.await(retired);
+      if (yield* Ref.getAndSet(retiring, true)) return yield* Deferred.await(retired);
       yield* closeScope(cause).pipe(Effect.withParentSpan(span));
     }).pipe(Effect.uninterruptible);
 
   // ---- turns ---------------------------------------------------------------
 
   /** Write a control request and wait for the CLI to acknowledge it. */
-  const requestControl = Effect.fnUntraced(function* (
-    lineFor: (requestId: string) => string,
-  ) {
+  const requestControl = Effect.fnUntraced(function* (lineFor: (requestId: string) => string) {
     if (!(yield* Ref.get(alive))) return false;
     const requestId = `pcc-${yield* Ref.updateAndGet(controlSequence, (n) => n + 1)}`;
     const acknowledged = yield* Deferred.make<boolean>();
@@ -643,13 +602,9 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   });
 
   /** The CLI reads thinking once per user turn, so never during one. */
-  const sendThinkingControl = Effect.fnUntraced(function* (
-    request: ThinkingControl,
-  ) {
+  const sendThinkingControl = Effect.fnUntraced(function* (request: ThinkingControl) {
     if (yield* Ref.get(turnActive)) return false;
-    return yield* requestControl((requestId) =>
-      controlRequestLine(requestId, request),
-    );
+    return yield* requestControl((requestId) => controlRequestLine(requestId, request));
   });
 
   /**
@@ -672,11 +627,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     yield* Ref.set(toolsRelisted, Option.some(relisted));
     const acknowledged =
       (yield* requestControl((requestId) =>
-        mcpServerNotificationLine(
-          requestId,
-          INBAND_MCP_SERVER_NAME,
-          MCP_TOOLS_CHANGED_METHOD,
-        ),
+        mcpServerNotificationLine(requestId, INBAND_MCP_SERVER_NAME, MCP_TOOLS_CHANGED_METHOD),
       )) &&
       (yield* Deferred.await(relisted).pipe(
         Effect.as(true),
@@ -748,18 +699,13 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     thinking: Ref.get(thinking),
     rateLimit: Ref.get(rateLimit),
     writeUser,
-    takesStructuredImport: Option.exists(
-      yield* cli.version,
-      supportsStructuredImport,
-    ),
+    takesStructuredImport: Option.exists(yield* cli.version, supportsStructuredImport),
     importHistory,
     interruptTurn: Effect.gen(function* () {
       const requestId = `pcc-int-${yield* Ref.updateAndGet(controlSequence, (n) => n + 1)}`;
       yield* write(controlRequestLine(requestId, { subtype: "interrupt" }));
     }),
-    applyThinking: Effect.fn("ClaudeProcess.applyThinking")(function* (
-      desired: CliThinking,
-    ) {
+    applyThinking: Effect.fn("ClaudeProcess.applyThinking")(function* (desired: CliThinking) {
       const applied = yield* Ref.get(thinking);
       yield* Effect.annotateCurrentSpan({
         from: applied.kind,
@@ -788,8 +734,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
       }),
     awaitsToolCalls: (toolUseIds) =>
       Effect.gen(function* () {
-        if (!(yield* Ref.get(alive)) || !(yield* Ref.get(turnActive)))
-          return false;
+        if (!(yield* Ref.get(alive)) || !(yield* Ref.get(turnActive))) return false;
         if (toolUseIds.length === 0) return false;
         const calls = yield* Ref.get(expected);
         for (const toolUseId of toolUseIds) {
@@ -802,8 +747,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     answerToolCall: (toolUseId, result) =>
       Effect.gen(function* () {
         const call = HashMap.get(yield* Ref.get(expected), toolUseId);
-        if (Option.isSome(call))
-          yield* Deferred.succeed(call.value.result, result);
+        if (Option.isSome(call)) yield* Deferred.succeed(call.value.result, result);
       }),
     retire,
     awaitRetired: Deferred.await(retired),

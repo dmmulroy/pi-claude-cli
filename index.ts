@@ -140,15 +140,12 @@ export default function (pi: ExtensionAPI) {
     // provider through pi-ai: its parked process goes with it rather than
     // waiting out the keepalive. A pi-ai older than the hook has no such
     // export, which a namespace import reads as undefined.
-    const registerCleanup:
-      typeof piAi.registerSessionResourceCleanup | undefined =
+    const registerCleanup: typeof piAi.registerSessionResourceCleanup | undefined =
       piAi.registerSessionResourceCleanup;
     const unregisterCleanup =
       typeof registerCleanup === "function"
         ? registerCleanup((sessionId) => {
-            void loadedRuntime().then((runtime) =>
-              runtime?.retireSession(sessionId),
-            );
+            void loadedRuntime().then((runtime) => runtime?.retireSession(sessionId));
           })
         : undefined;
 
@@ -166,10 +163,7 @@ export default function (pi: ExtensionAPI) {
     // stream fn resolves model.api against pi-ai's global api registry
     // instead; print mode and nested agent loops take that path. Register
     // the custom api id there too.
-    registerApiProvider(
-      { api: PROVIDER_ID, stream: streamSimple, streamSimple },
-      PROVIDER_ID,
-    );
+    registerApiProvider({ api: PROVIDER_ID, stream: streamSimple, streamSimple }, PROVIDER_ID);
 
     // Overflow recovery: rewrite provider-scoped context-limit errors to
     // the prefix pi's auto-compaction recognizes (see src/overflow.ts).
@@ -180,9 +174,7 @@ export default function (pi: ExtensionAPI) {
     pi.registerCommand("pi-claude-cli-status", {
       description: "Check that Claude Code is installed and logged in",
       handler: async (_args, ctx) => {
-        const { level, message } = describeCliAuthStatus(
-          await authStatus.refresh(),
-        );
+        const { level, message } = describeCliAuthStatus(await authStatus.refresh());
         ctx.ui.notify(message, level);
       },
     });
@@ -198,8 +190,7 @@ export default function (pi: ExtensionAPI) {
         // list-price cost "(sub)".
         apiKey: {
           name: "Claude Code login",
-          check: async ({ signal }) =>
-            providerAuthCheck(await authStatus.status(signal)),
+          check: async ({ signal }) => providerAuthCheck(await authStatus.status(signal)),
           resolve: async () => ({
             auth: { apiKey: "unused" },
             source: "Claude Code CLI",
@@ -237,11 +228,7 @@ export default function (pi: ExtensionAPI) {
       // stream options; pi's composer serves `stream` with `streamSimple`
       // for extension providers in the same way.
       stream: (model, context, options) =>
-        streamSimple(
-          model,
-          context,
-          options as Parameters<StartEpisode>[3] | undefined,
-        ),
+        streamSimple(model, context, options as Parameters<StartEpisode>[3] | undefined),
       streamSimple,
     };
     pi.registerProvider(nativeProvider);
