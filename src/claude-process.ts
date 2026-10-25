@@ -25,6 +25,7 @@ import {
   Exit,
   Fiber,
   FiberHandle,
+  FiberMap,
   HashMap,
   Option,
   Queue,
@@ -36,6 +37,7 @@ import {
 import { ClaudeCli } from "./claude-cli.ts";
 import {
   assistantReplayLine,
+  type ClaudeRateLimitInfo,
   type CliMessage,
   type CliUserContentBlock,
   controlRequestLine,
@@ -100,6 +102,12 @@ export type RetireCause =
   /** A pi lifecycle event or the runtime's disposal. */
   | "shutdown";
 
+/** A limit status the CLI reported, and when it arrived. */
+export interface ReportedRateLimit {
+  readonly info: ClaudeRateLimitInfo;
+  readonly reportedAtMillis: number;
+}
+
 /** What a process is launched with. */
 export interface ClaudeProcessLaunch {
   readonly cliSessionId: string;
@@ -149,6 +157,14 @@ export interface IClaudeProcess {
   readonly lastOutputAtMillis: Effect.Effect<number>;
   /** A user message has been written and no `result` has followed yet. */
   readonly isTurnActive: Effect.Effect<boolean>;
+  /** The thinking the process's current or next turn runs at. */
+  readonly thinking: Effect.Effect<CliThinking>;
+  /**
+   * The subscription's limit status the CLI last reported, set by the stdout
+   * reader as it arrives: after an API call's `message_stop`, which may be
+   * after the episode that streamed the call has handed off.
+   */
+  readonly rateLimit: Effect.Effect<Option.Option<ReportedRateLimit>>;
   /** Start a turn. Fails with `ProcessGone` when the process has ended. */
   readonly writeUser: (
     content: ReadonlyArray<CliUserContentBlock>,
@@ -270,14 +286,18 @@ const startClaudeProcess = Effect.fnUntraced(function* (
   const turnActive = yield* Ref.make(false);
   const turnEnded = yield* Ref.make(yield* Deferred.make<void>());
   const thinking = yield* Ref.make(launch.thinking);
+  const rateLimit = yield* Ref.make(Option.none<ReportedRateLimit>());
   const tools = yield* Ref.make(launch.tools);
   /** Completed by the next `tools/list` the CLI sends. */
   const toolsRelisted = yield* Ref.make(Option.none<Deferred.Deferred<void>>());
   const stderrTail = yield* Ref.make("");
   const expected = yield* Ref.make(HashMap.empty<string, ExpectedToolCall>());
-  const openCalls = yield* Ref.make(
-    HashMap.empty<JsonRpcId, Fiber.Fiber<void>>(),
-  );
+  /**
+   * The fiber holding each `tools/call` open until pi answers it, by its
+   * JSON-RPC id. A fiber leaves the map when it ends; retiring interrupts
+   * whatever is left before the CLI is asked to exit.
+   */
+  const openCalls = yield* FiberMap.make<JsonRpcId>();
   const controlWaiters = yield* Ref.make(
     HashMap.empty<string, Deferred.Deferred<boolean>>(),
   );
@@ -378,19 +398,13 @@ const startClaudeProcess = Effect.fnUntraced(function* (
         outcome: result.isError ? "toolError" : "ok",
       });
     }).pipe(
-      Effect.ensuring(
-        Effect.all([
-          Ref.update(expected, HashMap.remove(toolUseId.value)),
-          Ref.update(openCalls, HashMap.remove(id)),
-        ]),
-      ),
+      Effect.ensuring(Ref.update(expected, HashMap.remove(toolUseId.value))),
       Effect.withSpan("toolCall", {
         parent: span,
         attributes: { toolUseId: toolUseId.value, tool: entry.value.name },
       }),
     );
-    const fiber = yield* Effect.forkIn(answer, scope);
-    yield* Ref.update(openCalls, HashMap.set(id, fiber));
+    yield* FiberMap.run(openCalls, id, answer);
   });
 
   const handleMcpRequest = Effect.fnUntraced(function* (
@@ -418,8 +432,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
         return yield* write(mcpNotificationAckLine(message.requestId));
       case "CancelCall": {
         // The CLI gave up on the call (interrupt, or its own timeout).
-        const fiber = HashMap.get(yield* Ref.get(openCalls), action.id);
-        if (Option.isSome(fiber)) yield* Fiber.interrupt(fiber.value);
+        yield* FiberMap.remove(openCalls, action.id);
         return yield* write(mcpNotificationAckLine(message.requestId));
       }
       case "CallTool":
@@ -484,6 +497,16 @@ const startClaudeProcess = Effect.fnUntraced(function* (
         return yield* failExpectedToolCalls(
           "the turn ended before pi delivered this result.",
         );
+      case "RateLimit":
+        yield* Ref.set(
+          rateLimit,
+          Option.some({
+            info: message.info,
+            reportedAtMillis: yield* Clock.currentTimeMillis,
+          }),
+        );
+        return yield* Queue.offer(inbox, message);
+      case "AssistantMessage":
       case "Other":
         return yield* Queue.offer(inbox, message);
     }
@@ -579,6 +602,9 @@ const startClaudeProcess = Effect.fnUntraced(function* (
       if (yield* isRunning) yield* Ref.set(endedBy, "killed");
     }),
   );
+  // Registered after the one above, so it runs first: an open tool call is
+  // abandoned, not answered, by the process that is going away.
+  yield* Effect.addFinalizer(() => FiberMap.clear(openCalls));
 
   const closeScope = Effect.fn("ClaudeProcess.retire")(function* (
     cause: RetireCause,
@@ -719,6 +745,8 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     isAlive: Ref.get(alive),
     lastOutputAtMillis: Ref.get(lastOutputAt),
     isTurnActive: Ref.get(turnActive),
+    thinking: Ref.get(thinking),
+    rateLimit: Ref.get(rateLimit),
     writeUser,
     takesStructuredImport: Option.exists(
       yield* cli.version,

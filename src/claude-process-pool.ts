@@ -56,6 +56,11 @@ export interface IClaudeProcessPool {
   ) => Effect.Effect<void>;
   /** Retire every parked process and wait for them to be gone. */
   readonly retireAll: (cause: RetireCause) => Effect.Effect<void>;
+  /** Retire the process parked for one pi session, if any, and wait for it. */
+  readonly retireSession: (
+    piSessionId: string,
+    cause: RetireCause,
+  ) => Effect.Effect<void>;
 }
 
 /** Provides the pool of CLI processes. */
@@ -186,6 +191,18 @@ export const makeClaudeProcessPool = Effect.gen(function* () {
         (entry) => entry.process.retire(cause),
         { concurrency: "unbounded", discard: true },
       );
+    }),
+
+    retireSession: Effect.fn("ClaudeProcessPool.retireSession")(function* (
+      piSessionId: string,
+      cause: RetireCause,
+    ) {
+      const entry = yield* Ref.modify(parked, (entries) => [
+        HashMap.get(entries, piSessionId),
+        HashMap.remove(entries, piSessionId),
+      ]);
+      yield* Effect.annotateCurrentSpan({ cause, hit: Option.isSome(entry) });
+      if (Option.isSome(entry)) yield* entry.value.process.retire(cause);
     }),
   });
 });

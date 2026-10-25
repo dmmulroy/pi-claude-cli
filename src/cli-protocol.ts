@@ -21,6 +21,14 @@ const ClaudeUsage = Schema.Struct({
   output_tokens: TokenCount,
   cache_read_input_tokens: TokenCount,
   cache_creation_input_tokens: TokenCount,
+  /** The cache write split by lifetime; on `message_start` only. */
+  cache_creation: Schema.optional(
+    Schema.NullOr(Schema.Struct({ ephemeral_1h_input_tokens: TokenCount })),
+  ),
+  /** Thinking tokens, a subset of `output_tokens`; on `message_delta`. */
+  output_tokens_details: Schema.optional(
+    Schema.NullOr(Schema.Struct({ thinking_tokens: TokenCount })),
+  ),
 });
 
 /** Token counts of one API call or one turn, as the Anthropic API names them. */
@@ -44,7 +52,11 @@ const ClaudeApiEvent = Schema.Struct({
   type: Schema.String,
   index: Schema.optional(Schema.Number),
   message: Schema.optional(
-    Schema.Struct({ usage: Schema.optional(Schema.NullOr(ClaudeUsage)) }),
+    Schema.Struct({
+      /** The API message id (`msg_…`), on `message_start`. */
+      id: Schema.optional(Schema.String),
+      usage: Schema.optional(Schema.NullOr(ClaudeUsage)),
+    }),
   ),
   content_block: Schema.optional(
     Schema.Struct({
@@ -64,6 +76,14 @@ const ClaudeApiEvent = Schema.Struct({
       thinking: Schema.optional(Schema.String),
       signature: Schema.optional(Schema.String),
       stop_reason: Schema.optional(Schema.NullOr(Schema.String)),
+      /** Why the model stopped, when the API says; a refusal's explanation. */
+      stop_details: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            explanation: Schema.optional(Schema.NullOr(Schema.String)),
+          }),
+        ),
+      ),
     }),
   ),
   usage: Schema.optional(Schema.NullOr(ClaudeUsage)),
@@ -93,6 +113,40 @@ const ClaudeResultMessage = Schema.Struct({
 
 /** The `result` envelope that ends a turn. */
 export type ClaudeResultMessage = typeof ClaudeResultMessage.Type;
+
+const ClaudeRateLimitInfo = Schema.Struct({
+  /** `allowed`, `allowed_warning`, `rejected`. */
+  status: Schema.optional(Schema.NullOr(Schema.String)),
+  /** The window the status is about: `five_hour`, `seven_day`, … */
+  rateLimitType: Schema.optional(Schema.NullOr(Schema.String)),
+  /** When the window resets, in Unix seconds. */
+  resetsAt: Schema.optional(Schema.NullOr(Schema.Number)),
+  /** True when the request was charged to usage credits, not plan limits. */
+  isUsingOverage: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  overageStatus: Schema.optional(Schema.NullOr(Schema.String)),
+  overageDisabledReason: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+/**
+ * The subscription's limit status after an API call, as the CLI reports it
+ * in a `rate_limit_event` (between the model's `message_stop` and the turn's
+ * `result`).
+ */
+export type ClaudeRateLimitInfo = typeof ClaudeRateLimitInfo.Type;
+
+const ClaudeAssistantBlock = Schema.Struct({
+  type: Schema.String,
+  text: Schema.optional(Schema.String),
+  id: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.String),
+  input: Schema.optional(Schema.Unknown),
+});
+
+/**
+ * One content block of an `assistant` envelope: the CLI's own record of what
+ * the model returned, built from the same API stream the provider bridges.
+ */
+export type ClaudeAssistantBlock = typeof ClaudeAssistantBlock.Type;
 
 // ---- stdout: control channel ------------------------------------------------
 
@@ -137,6 +191,13 @@ const ControlResponseBody = Schema.Struct({
 
 const Envelope = Schema.Struct({ type: Schema.String });
 const StreamEventBody = Schema.Struct({ event: ClaudeApiEvent });
+const AssistantBody = Schema.Struct({
+  message: Schema.Struct({
+    id: Schema.optional(Schema.String),
+    content: Schema.Array(ClaudeAssistantBlock),
+  }),
+});
+const RateLimitBody = Schema.Struct({ rate_limit_info: ClaudeRateLimitInfo });
 
 /** One decoded stdout line of the CLI. */
 export type CliMessage =
@@ -164,9 +225,24 @@ export type CliMessage =
     }
   | {
       /**
-       * An envelope with nothing for pi's stream (`assistant`, `user`,
-       * `system`, `rate_limit_event`, anything new). It still counts as
-       * output for the inactivity timeout.
+       * The CLI's record of an API message, written as each content block
+       * completes (before its `content_block_stop`), one or more blocks at a
+       * time. Compared with what was bridged; never streamed to pi.
+       */
+      readonly _tag: "AssistantMessage";
+      /** The API message id, as on that message's `message_start`. */
+      readonly id: Option.Option<string>;
+      readonly content: ReadonlyArray<ClaudeAssistantBlock>;
+    }
+  | {
+      /** The subscription's limit status after an API call. */
+      readonly _tag: "RateLimit";
+      readonly info: ClaudeRateLimitInfo;
+    }
+  | {
+      /**
+       * An envelope with nothing for pi's stream (`user`, `system`, anything
+       * new). It still counts as output for the inactivity timeout.
        */
       readonly _tag: "Other";
       readonly type: string;
@@ -176,6 +252,8 @@ const decodeJson = Schema.decodeOption(Schema.fromJsonString(Schema.Unknown));
 const decodeEnvelope = Schema.decodeUnknownOption(Envelope);
 const decodeStreamEvent = Schema.decodeUnknownOption(StreamEventBody);
 const decodeResult = Schema.decodeUnknownOption(ClaudeResultMessage);
+const decodeAssistant = Schema.decodeUnknownOption(AssistantBody);
+const decodeRateLimit = Schema.decodeUnknownOption(RateLimitBody);
 const decodeToolPermissionRequest = Schema.decodeUnknownOption(
   ToolPermissionRequestBody,
 );
@@ -196,6 +274,17 @@ const decodeEnvelopeBody = (
       return Option.map(decodeResult(json), (result): CliMessage => ({
         _tag: "Result",
         result,
+      }));
+    case "assistant":
+      return Option.map(decodeAssistant(json), ({ message }): CliMessage => ({
+        _tag: "AssistantMessage",
+        id: Option.fromUndefinedOr(message.id),
+        content: message.content,
+      }));
+    case "rate_limit_event":
+      return Option.map(decodeRateLimit(json), (body): CliMessage => ({
+        _tag: "RateLimit",
+        info: body.rate_limit_info,
       }));
     case "control_request":
       return Option.orElse(
@@ -256,6 +345,10 @@ export const cliMessageLabel = (message: CliMessage): string => {
       return "control_request";
     case "ControlResponse":
       return "control_response";
+    case "AssistantMessage":
+      return "assistant";
+    case "RateLimit":
+      return "rate_limit_event";
     case "Other":
       return message.type;
   }

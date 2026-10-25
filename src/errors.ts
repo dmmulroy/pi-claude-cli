@@ -56,6 +56,35 @@ export class CliResultError extends Data.TaggedError("CliResultError")<{
 }> {}
 
 /**
+ * A model call was charged to usage credits instead of plan limits, and
+ * `PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS` is not set. The message contains
+ * "billing", so pi does not retry it.
+ */
+export class UsageCreditsChargeError extends Data.TaggedError(
+  "UsageCreditsChargeError",
+)<{
+  readonly message: string;
+}> {}
+
+/** The model stopped without an answer: a refusal or a safety stop. */
+export class ModelStopError extends Data.TaggedError("ModelStopError")<{
+  /** The API's stop reason: `refusal`, `sensitive`. */
+  readonly stopReason: string;
+  readonly message: string;
+}> {}
+
+/**
+ * What the CLI streamed of an API message is not what it recorded of the
+ * same message, so what pi received cannot be trusted; above all a tool
+ * call's arguments.
+ */
+export class StreamMismatchError extends Data.TaggedError(
+  "StreamMismatchError",
+)<{
+  readonly message: string;
+}> {}
+
+/**
  * The CLI wrote nothing to stdout for the configured idle timeout
  * (`PI_CLAUDE_CLI_TIMEOUT_MS`) while pi was waiting for it.
  */
@@ -75,4 +104,7 @@ export type EpisodeError =
   | ProcessExited
   | ProcessGone
   | CliResultError
+  | UsageCreditsChargeError
+  | ModelStopError
+  | StreamMismatchError
   | InactivityTimeout;

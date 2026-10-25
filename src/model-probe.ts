@@ -23,7 +23,7 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { CliAccountModel } from "./account-models.ts";
-import { SUBSCRIPTION_OVERRIDE_ENV_VARS } from "./claude-cli.ts";
+import { SUBSCRIPTION_OVERRIDE_ENV_VARS } from "./subscription-env.ts";
 import { parseCliVersion } from "./cli-requirements.ts";
 import { nodeChildProcessSpawnerLayer } from "./node-platform.ts";
 import { tracingLayer } from "./tracing.ts";

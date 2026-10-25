@@ -34,6 +34,7 @@ import {
 import { Type } from "typebox";
 import type { EpisodeOptions } from "../../src/episode.ts";
 import { nodeFileSystemLayer } from "../../src/node-platform.ts";
+import { RATE_LIMIT_DIAGNOSTIC } from "../../src/event-bridge.ts";
 import { readSignedThinking } from "../../src/signed-thinking.ts";
 import { isClaudeToolUseId } from "../../src/tool-call-id.ts";
 import {
@@ -182,6 +183,8 @@ const scenarioSession = Effect.fn("ScenarioDriver.session")(function* (
     update: (change: (current: Conversation) => Conversation) =>
       Ref.update(conversation, change),
     retireParked: Effect.promise(() => runtime.retireParkedProcesses()),
+    /** What pi's session cleanup does when it disposes this session. */
+    retireSession: Effect.promise(() => runtime.retireSession(SESSION_ID)),
     messages: Effect.map(Ref.get(conversation), (current) => current.messages),
   };
 });
@@ -647,6 +650,95 @@ const scenarios: Record<
       yield* Effect.sleep("200 millis");
     }),
 
+  "usage-credits-guard": (session) =>
+    Effect.gen(function* () {
+      yield* expectError(yield* session.say("overage"), "error", "billing");
+      yield* Effect.sleep("200 millis");
+    }),
+
+  "usage-credits-allowed": (session) =>
+    Effect.gen(function* () {
+      const answer = yield* session.say("overage");
+      yield* expectDone(answer, "PORT-OK");
+      const status = answer.diagnostics?.find(
+        (diagnostic) => diagnostic.type === RATE_LIMIT_DIAGNOSTIC,
+      );
+      yield* expect(
+        status?.details?.isUsingOverage === true,
+        `expected the usage-credit status on pi's message, got ${JSON.stringify(answer.diagnostics)}`,
+      );
+    }),
+
+  "usage-credits-after-handoff": (session) =>
+    Effect.gen(function* () {
+      // The status of the call that asked for the tool arrives after its
+      // message_stop, so after this episode has handed the call to pi.
+      yield* expectToolCalls(yield* session.say("tool:read overage"), ["read"]);
+      yield* session.answerToolCalls("CONTENT");
+      // The tool result is not sent: nothing more is charged.
+      yield* expectError(yield* session.call(), "error", "billing");
+      yield* Effect.sleep("200 millis");
+    }),
+
+  "model-refusal": (session) =>
+    Effect.gen(function* () {
+      const answer = yield* session.say("refuse");
+      yield* expectError(answer, "error", "STUB-REFUSAL");
+      yield* expect(
+        answer.rawStopReason === "refusal",
+        `expected the raw stop reason, got ${answer.rawStopReason}`,
+      );
+      yield* Effect.sleep("200 millis");
+    }),
+
+  "stream-mismatch": (session) =>
+    Effect.gen(function* () {
+      yield* expectError(
+        yield* session.say("mismatch"),
+        "error",
+        "stream was inconsistent",
+      );
+      yield* Effect.sleep("200 millis");
+    }),
+
+  "response-fields": (session) =>
+    Effect.gen(function* () {
+      const answer = yield* session.say("think");
+      yield* expectDone(answer, "PORT-OK");
+      yield* expect(
+        answer.responseId?.startsWith("msg_stub_") === true &&
+          answer.rawStopReason === "end_turn",
+        `expected the API message id and raw stop reason, got ${answer.responseId} ${answer.rawStopReason}`,
+      );
+      yield* expect(
+        answer.usage.cacheWrite1h === 7 && answer.usage.reasoning === 2,
+        `expected the usage breakdown, got ${JSON.stringify(answer.usage)}`,
+      );
+      const types = (answer.diagnostics ?? []).map(
+        (diagnostic) => diagnostic.type,
+      );
+      // Signed thinking is conversation content: it stays off `diagnostics`,
+      // which pi's bug report collects without asking.
+      yield* expect(
+        types.length === 1 &&
+          types[0] === RATE_LIMIT_DIAGNOSTIC &&
+          readSignedThinking(answer) !== undefined,
+        `expected the limit status as the one diagnostic and signed thinking beside it, got ${JSON.stringify(types)}`,
+      );
+      // Haiku 4.5 thinks on a budget: it has no effort to report.
+      yield* expect(
+        answer.providerThinkingLevel === undefined,
+        `expected no provider thinking level, got ${answer.providerThinkingLevel}`,
+      );
+    }),
+
+  "session-retire": (session) =>
+    Effect.gen(function* () {
+      yield* expectDone(yield* session.say("hello"), "PORT-OK");
+      yield* session.retireSession;
+      yield* expectDone(yield* session.say("again"), "PORT-OK");
+    }),
+
   "turn-fails": (session) =>
     Effect.gen(function* () {
       yield* expectError(
@@ -839,6 +931,13 @@ const scenarios: Record<
           seen.includes('"retryWatchdog":null') &&
           seen.includes('"disableNonessentialTraffic":"1"'),
         `expected no CLI retries and no non-essential traffic, got ${seen}`,
+      );
+      // No other model provider, and nothing of the CLI's own in pi's requests.
+      yield* expect(
+        seen.includes('"providerSwitches":[]') &&
+          seen.includes('"extraBody":null') &&
+          seen.includes('"totalTokensReminder":"off"'),
+        `expected no provider switches, no extra body and no token reminder, got ${seen}`,
       );
     }),
 };

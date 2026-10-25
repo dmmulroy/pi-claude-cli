@@ -1,6 +1,8 @@
 import type {
   ClaudeApiEvent,
+  ClaudeAssistantBlock,
   ClaudeModelUsage,
+  ClaudeRateLimitInfo,
   ClaudeResultMessage,
   ClaudeUsage,
 } from "./cli-protocol.ts";
@@ -8,8 +10,11 @@ import { calculateCost } from "@earendil-works/pi-ai";
 import type {
   Api,
   AssistantMessage,
+  AssistantMessageDiagnostic,
   AssistantMessageEventStream,
+  JsonObject,
   Model,
+  StopReason,
   TextContent,
   ThinkingContent,
   ToolCall,
@@ -87,6 +92,28 @@ type TrackedBlock = TrackedContentBlock | TrackedToolBlock;
 export interface EventBridge {
   handleEvent(event: ClaudeApiEvent): void;
   /**
+   * The CLI's own record of blocks of an API message (an `assistant`
+   * envelope), kept to check the stream against (`streamMismatch`).
+   */
+  recordAssistantBlocks(
+    messageId: string,
+    content: ReadonlyArray<ClaudeAssistantBlock>,
+  ): void;
+  /**
+   * How the current API message as streamed differs from the CLI's record
+   * of it, or undefined when it does not (or there is no record). Asked at
+   * `message_stop`, by which time the CLI has written its record of every
+   * block. Text and pi's tool calls are compared; thinking is not.
+   */
+  streamMismatch(): string | undefined;
+  /**
+   * The subscription's latest limit status, kept as a diagnostic stamped
+   * with when the CLI reported it.
+   */
+  recordRateLimit(info: ClaudeRateLimitInfo, reportedAtMillis: number): void;
+  /** The CLI effort the response ran at; undefined when thinking is not set. */
+  setProviderThinkingLevel(level: string | undefined): void;
+  /**
    * The final `result` envelope: authoritative cumulative usage for the
    * whole episode, plus a safety net that appends the final answer text if
    * any stream pathology kept it out of the bridged content.
@@ -106,18 +133,74 @@ function isArgumentObject(value: unknown): value is ToolCall["arguments"] {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function mapStopReason(
-  reason: string | undefined,
-): "stop" | "length" | "toolUse" {
+/** The `diagnostics` type of the entry that holds the latest limit status. */
+export const RATE_LIMIT_DIAGNOSTIC = "pi-claude-cli.rate-limit";
+
+/**
+ * pi's stop reason for the API's, as pi's own Anthropic provider maps it. A
+ * refusal and a safety stop are errors with a message; a reason this
+ * provider does not know yet ends the turn normally, since the CLI already
+ * accepted it.
+ */
+export function mapStopReason(
+  reason: string,
+  explanation?: string | null,
+): { readonly stopReason: StopReason; readonly errorMessage?: string } {
   switch (reason) {
     case "tool_use":
-      return "toolUse";
+      return { stopReason: "toolUse" };
     case "max_tokens":
-      return "length";
+    case "model_context_window_exceeded":
+      return { stopReason: "length" };
+    case "refusal":
+      return {
+        stopReason: "error",
+        errorMessage:
+          explanation !== undefined &&
+          explanation !== null &&
+          explanation.length > 0
+            ? explanation
+            : "The model refused to complete the request",
+      };
+    case "sensitive":
+      return {
+        stopReason: "error",
+        errorMessage: "Provider stopped with: sensitive",
+      };
     case "end_turn":
+    case "pause_turn":
+    case "stop_sequence":
     default:
-      return "stop";
+      return { stopReason: "stop" };
   }
+}
+
+/** JSON text with object keys sorted, so equal values have equal text. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && value !== null)
+    return `{${Object.entries(value)
+      .filter(([, child]) => child !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+      .join(",")}}`;
+  return JSON.stringify(value) ?? "null";
+}
+
+/** Text with something besides whitespace in it. */
+const hasVisibleText = (text: string): boolean => text.trim().length > 0;
+
+/** The limit status as a diagnostic's details: only the fields it has. */
+function rateLimitDetails(info: ClaudeRateLimitInfo): JsonObject {
+  const details: JsonObject = {};
+  for (const [key, value] of Object.entries(info))
+    if (
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    )
+      details[key] = value;
+  return details;
 }
 
 /**
@@ -158,6 +241,11 @@ export function createEventBridge(
 
   let started = false;
 
+  /** The API message id of each cycle, from its `message_start`. */
+  const cycleMessageIds = new Map<number, string>();
+  /** The CLI's record of each API message's blocks, by message id. */
+  const recordedBlocks = new Map<string, ClaudeAssistantBlock[]>();
+
   /**
    * The thinking blocks of the API message as it returned them, signatures
    * included, for a later process to be given back (`src/signed-thinking.ts`).
@@ -192,6 +280,18 @@ export function createEventBridge(
     cache_creation_input_tokens: 0,
   };
   let cycleUsage: Partial<UsageCounters> = {};
+  /**
+   * The 1h-lifetime share of the cache write and the thinking share of the
+   * output, summed over cycles like the counters above. Undefined until the
+   * API reports them. `applyResult` leaves them alone: the result's totals
+   * do not split either.
+   */
+  let bankedCacheWrite1h: number | undefined;
+  let cycleCacheWrite1h: number | undefined;
+  let bankedReasoning: number | undefined;
+  let cycleReasoning: number | undefined;
+  const plus = (a: number | undefined, b: number | undefined) =>
+    a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0);
   /**
    * Context size of the most recent cycle — what the model actually saw on
    * its last call, which is NOT the episode's summed usage.
@@ -275,6 +375,16 @@ export function createEventBridge(
           output.usage.output +
           output.usage.cacheRead +
           output.usage.cacheWrite;
+    // Subsets of the totals above, never more than them.
+    const cacheWrite1h = plus(bankedCacheWrite1h, cycleCacheWrite1h);
+    if (cacheWrite1h !== undefined)
+      output.usage.cacheWrite1h = Math.min(
+        cacheWrite1h,
+        output.usage.cacheWrite,
+      );
+    const reasoning = plus(bankedReasoning, cycleReasoning);
+    if (reasoning !== undefined)
+      output.usage.reasoning = Math.min(reasoning, output.usage.output);
     calculateCost(model, output.usage);
   }
 
@@ -333,6 +443,10 @@ export function createEventBridge(
         cumulativeUsage.cache_creation_input_tokens +=
           cycleUsage.cache_creation_input_tokens ?? 0;
         cycleUsage = {};
+        bankedCacheWrite1h = plus(bankedCacheWrite1h, cycleCacheWrite1h);
+        cycleCacheWrite1h = undefined;
+        bankedReasoning = plus(bankedReasoning, cycleReasoning);
+        cycleReasoning = undefined;
         cycle++;
         // A second API message in the episode: nothing is replayable.
         if (cycle > 0) storeSignedThinking();
@@ -358,9 +472,17 @@ export function createEventBridge(
   }
 
   function handleMessageStart(event: ClaudeApiEvent): void {
+    const id = event.message?.id;
+    if (id !== undefined) {
+      cycleMessageIds.set(cycle, id);
+      // The last API message of the episode is the response pi records.
+      output.responseId = id;
+    }
     const usage = event.message?.usage;
     if (usage) {
       cycleUsage = presentCounters(usage);
+      cycleCacheWrite1h =
+        usage.cache_creation?.ephemeral_1h_input_tokens ?? undefined;
       recomputeUsage();
     }
   }
@@ -659,7 +781,15 @@ export function createEventBridge(
   function handleMessageDelta(event: ClaudeApiEvent): void {
     if (event.delta?.stop_reason) {
       // The LAST cycle's stop reason is the episode's stop reason.
-      output.stopReason = mapStopReason(event.delta.stop_reason);
+      const mapped = mapStopReason(
+        event.delta.stop_reason,
+        event.delta.stop_details?.explanation,
+      );
+      output.rawStopReason = event.delta.stop_reason;
+      output.stopReason = mapped.stopReason;
+      if (mapped.errorMessage !== undefined)
+        output.errorMessage = mapped.errorMessage;
+      else delete output.errorMessage;
     }
 
     const usage = event.usage;
@@ -675,6 +805,10 @@ export function createEventBridge(
       if (usage.cache_creation_input_tokens != null)
         cycleUsage.cache_creation_input_tokens =
           usage.cache_creation_input_tokens;
+      if (usage.cache_creation?.ephemeral_1h_input_tokens != null)
+        cycleCacheWrite1h = usage.cache_creation.ephemeral_1h_input_tokens;
+      if (usage.output_tokens_details?.thinking_tokens != null)
+        cycleReasoning = usage.output_tokens_details.thinking_tokens;
       recomputeUsage();
     }
   }
@@ -728,9 +862,94 @@ export function createEventBridge(
     }
   }
 
+  function recordAssistantBlocks(
+    messageId: string,
+    content: ReadonlyArray<ClaudeAssistantBlock>,
+  ): void {
+    const recorded = recordedBlocks.get(messageId) ?? [];
+    recorded.push(...content);
+    recordedBlocks.set(messageId, recorded);
+  }
+
+  function streamMismatch(): string | undefined {
+    const id = cycleMessageIds.get(cycle);
+    if (id === undefined) return undefined;
+    // Whitespace-only text is left out, and text is compared trimmed: the
+    // CLI may tidy what it records of a message, and only a difference in
+    // what the model said should fail the call.
+    const recorded = (recordedBlocks.get(id) ?? []).filter(
+      (block) =>
+        (block.type === "text" && hasVisibleText(block.text ?? "")) ||
+        (block.type === "tool_use" && isHandoffClaudeTool(block.name ?? "")),
+    );
+    const streamed = blocks.filter(
+      (block) =>
+        block.cycle === cycle &&
+        ((block.type === "text" && hasVisibleText(block.text)) ||
+          block.type === "tool_use"),
+    );
+    // The record may trail the stream, never the other way round.
+    if (recorded.length > streamed.length)
+      return `the stream carried ${streamed.length} of the ${recorded.length} blocks the Claude CLI recorded`;
+    for (const [position, expected] of recorded.entries()) {
+      const actual = streamed[position];
+      const differs = `block ${position + 1} (${expected.type}) of the stream differs from the Claude CLI's record of it`;
+      if (expected.type === "text") {
+        if (
+          actual?.type !== "text" ||
+          actual.text.trim() !== (expected.text ?? "").trim()
+        )
+          return differs;
+        continue;
+      }
+      if (
+        actual?.type !== "tool_use" ||
+        actual.id !== expected.id ||
+        actual.name !== mapClaudeToolNameToPi(expected.name ?? "")
+      )
+        return differs;
+      const content = output.content[actual.contentIndex];
+      // Arguments that did not arrive as an object reach pi as their raw
+      // text, which pi reports itself (see handleContentBlockStop).
+      if (
+        content?.type === "toolCall" &&
+        typeof content.arguments === "object" &&
+        canonicalJson(content.arguments) !== canonicalJson(expected.input ?? {})
+      )
+        return differs;
+    }
+    return undefined;
+  }
+
+  function recordRateLimit(
+    info: ClaudeRateLimitInfo,
+    reportedAtMillis: number,
+  ): void {
+    const diagnostic: AssistantMessageDiagnostic = {
+      type: RATE_LIMIT_DIAGNOSTIC,
+      timestamp: reportedAtMillis,
+      details: rateLimitDetails(info),
+    };
+    output.diagnostics = [
+      ...(output.diagnostics ?? []).filter(
+        (entry) => entry.type !== RATE_LIMIT_DIAGNOSTIC,
+      ),
+      diagnostic,
+    ];
+  }
+
+  function setProviderThinkingLevel(level: string | undefined): void {
+    if (level === undefined) delete output.providerThinkingLevel;
+    else output.providerThinkingLevel = level;
+  }
+
   return {
     handleEvent,
     applyResult,
+    recordAssistantBlocks,
+    streamMismatch,
+    recordRateLimit,
+    setProviderThinkingLevel,
     getOutput: () => output,
   };
 }

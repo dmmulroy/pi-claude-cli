@@ -9,6 +9,7 @@ import {
   sameThinking,
   cliThinkingLevelMap,
   PI_THINKING_BUDGETS,
+  providerThinkingLevel,
   type CliThinking,
 } from "../src/thinking-config";
 
@@ -318,5 +319,32 @@ describe("cliThinkingLevelMap: only levels the model has through Claude Code", (
     expect(
       cliThinkingLevelMap({ compat: { forceAdaptiveThinking: true } }),
     ).toEqual({ minimal: null });
+  });
+});
+
+describe("providerThinkingLevel: the effort a response ran at", () => {
+  /** A catalogue model as this provider registers it. */
+  const registered = (model: ReturnType<typeof catalogue>) => ({
+    thinkingLevelMap: cliThinkingLevelMap(model),
+  });
+
+  it("is the effort on every adaptive model with thinking on", () => {
+    for (const model of [sonnet5, opus46, opus55])
+      expect(
+        providerThinkingLevel(registered(model), enabled(8192, "medium")),
+      ).toBe("medium");
+  });
+
+  it("is none on a budget model, which ignores the effort", () => {
+    expect(
+      providerThinkingLevel(registered(haiku), enabled(8192, "medium")),
+    ).toBeUndefined();
+  });
+
+  it("is none without thinking", () => {
+    for (const thinking of [{ kind: "disabled" }, { kind: "default" }] as const)
+      expect(
+        providerThinkingLevel(registered(sonnet5), thinking),
+      ).toBeUndefined();
   });
 });

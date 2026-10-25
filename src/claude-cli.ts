@@ -30,6 +30,7 @@ import { CliRequirementError, CliSpawnError } from "./errors.ts";
 import { INBAND_MCP_CONFIG_JSON } from "./mcp-inband.ts";
 import { nodeChildProcessSpawnerLayer } from "./node-platform.ts";
 import { ProviderConfig, providerConfigLayer } from "./provider-config.ts";
+import { SUBSCRIPTION_OVERRIDE_ENV_VARS } from "./subscription-env.ts";
 import { type CliThinking, thinkingSpawnArgs } from "./thinking-config.ts";
 
 /** The CLI binary, resolved on PATH. */
@@ -37,17 +38,6 @@ const CLAUDE_COMMAND = "claude";
 
 /** How long `claude --version` and `claude auth status` may take. */
 const CLI_PROBE_TIMEOUT = Duration.seconds(5);
-
-/**
- * Environment variables that redirect the CLI away from its subscription
- * login. Never forwarded: turns would bill an API account, or fail against a
- * gateway that was meant for another tool.
- */
-export const SUBSCRIPTION_OVERRIDE_ENV_VARS = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-] as const;
 
 /** What one CLI process is launched with. */
 export interface ClaudeCliLaunch {
@@ -168,6 +158,10 @@ export const launchEnvironment = (
   // feature-flag fetching, so the CLI runs on its built-in flag defaults.
   CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
   ENABLE_TOOL_SEARCH: "false",
+  // No `<total_tokens>N tokens left</total_tokens>` countdown in the
+  // conversation: pi owns the context, and the CLI's own budget is not pi's.
+  // `off` is the value the CLI reads (checked in claude 2.1.299).
+  CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
   MCP_TOOL_TIMEOUT: mcpToolTimeoutMillis,
   // `undefined` removes the variable from the inherited environment.
   ...Object.fromEntries(
@@ -176,6 +170,9 @@ export const launchEnvironment = (
   // The unattended-session watchdog retries capacity errors indefinitely
   // and overrides the retry count above.
   CLAUDE_CODE_RETRY_WATCHDOG: undefined,
+  // JSON merged into every API request body: a host's setting for its own
+  // Claude Code would change the requests pi's turns make.
+  CLAUDE_CODE_EXTRA_BODY: undefined,
 });
 
 /** Constructs the CLI launcher over the contextual process spawner. */

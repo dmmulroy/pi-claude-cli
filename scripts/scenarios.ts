@@ -479,6 +479,95 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     ],
   ),
   scenario(
+    "usage-credits-guard",
+    "a call charged to usage credits ends with a billing error and its process is retired",
+    [
+      [
+        ...episode("outcome=error", "rateLimit.usageCredits=true"),
+        "--status",
+        "error",
+        ...count(1),
+      ],
+      [...span("ClaudeProcess.retire", "cause=failure"), ...count(1)],
+      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+    ],
+  ),
+  scenario(
+    "usage-credits-allowed",
+    "PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS=1 lets a call charged to usage credits end normally",
+    [
+      [...episode("outcome=done", "rateLimit.usageCredits=true"), ...count(1)],
+      [...span("ClaudeProcessPool.park"), ...count(1)],
+    ],
+    { env: { PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS: "1" } },
+  ),
+  scenario(
+    "usage-credits-after-handoff",
+    "a usage-credit charge reported after a tool call stops the next call before the tool result is sent",
+    [
+      [
+        ...episode("mode=spawn", "outcome=toolUse", "rateLimit.usageCredits"),
+        "--max-count",
+        "0",
+      ],
+      [
+        ...episode(
+          "mode=handoff",
+          "outcome=error",
+          "rateLimit.usageCredits=true",
+        ),
+        ...count(1),
+      ],
+      [...span("toolCall", "outcome=ok"), "--max-count", "0"],
+      [...span("ClaudeProcess.retire", "cause=failure"), ...count(1)],
+    ],
+  ),
+  scenario(
+    "model-refusal",
+    "a refusal ends with the model's explanation as an error and retires the process",
+    [
+      [...episode("outcome=error"), "--status", "error", ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=failure"), ...count(1)],
+      [...span("ClaudeProcessPool.park"), "--max-count", "0"],
+    ],
+  ),
+  scenario(
+    "stream-mismatch",
+    "a stream that differs from the CLI's own record of the message fails the episode",
+    [
+      [...episode("outcome=error"), "--status", "error", ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=failure"), ...count(1)],
+    ],
+  ),
+  scenario(
+    "response-fields",
+    "pi's message carries the response id, raw stop reason, usage breakdown and diagnostics",
+    [
+      [
+        ...episode(
+          "outcome=done",
+          "rateLimit.status=allowed",
+          "rateLimit.usageCredits=false",
+        ),
+        ...count(1),
+      ],
+    ],
+  ),
+  scenario(
+    "session-retire",
+    "pi's cleanup of a session retires the process parked for it",
+    [
+      [...span("ClaudeProcessPool.retireSession", "hit=true"), ...count(1)],
+      // One by the cleanup, one by the runtime's disposal at the end.
+      [...span("ClaudeProcess.retire", "cause=shutdown"), ...count(2)],
+      [...episode("mode=spawn", "spawnReason=noParked"), ...count(2)],
+      [
+        "--order",
+        "ClaudeProcessPool.retireSession,ClaudeProcess.retire[cause=shutdown]:end,episode[spawnReason=noParked]",
+      ],
+    ],
+  ),
+  scenario(
     "idle-expiry",
     "a parked process is retired when nobody comes back within the keepalive",
     [
@@ -548,6 +637,11 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
         ANTHROPIC_API_KEY: "sk-scenario-must-not-leak",
         ANTHROPIC_AUTH_TOKEN: "scenario-must-not-leak",
         ANTHROPIC_BASE_URL: "http://127.0.0.1:9",
+        ANTHROPIC_FOUNDRY_API_KEY: "scenario-must-not-leak",
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        CLAUDE_CODE_USE_VERTEX: "1",
+        CLAUDE_CODE_EXTRA_BODY: '{"scenario":"must-not-leak"}',
+        CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "padded-countdown",
         CLAUDE_CODE_MAX_RETRIES: "10",
         CLAUDE_CODE_RETRY_WATCHDOG: "1",
       },

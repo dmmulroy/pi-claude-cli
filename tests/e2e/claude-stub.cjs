@@ -26,6 +26,17 @@
  *                   answers "PORT-OK"
  *   die             starts a message, writes to stderr, exits with code 3
  *   failturn        ends the turn with an error result
+ *   refuse          the model refuses: stop_reason "refusal", explained as
+ *                   "STUB-REFUSAL"
+ *   mismatch        streams "PORT-OK" but records "PORT-KO" for it in the
+ *                   CLI's own `assistant` envelope
+ *   overage         combined with any of the above: every API call's
+ *                   rate_limit_event says it was charged to usage credits
+ *
+ * Like the real CLI (2.1.299), every API message has an id, every content
+ * block is recorded in an `assistant` envelope before its
+ * content_block_stop, and every API call ends with a `rate_limit_event`
+ * after its message_stop.
  *
  * Environment:
  *   CLAUDE_STUB_ARGV_FILE   append this process's argv as a JSON line
@@ -81,6 +92,12 @@ if (process.env.CLAUDE_STUB_ENV_FILE) {
         process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC ?? null,
       disableClaudeMds: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS ?? null,
       secureStorageDir: process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR ?? null,
+      providerSwitches: Object.keys(process.env).filter((key) =>
+        key.startsWith("CLAUDE_CODE_USE_"),
+      ),
+      extraBody: process.env.CLAUDE_CODE_EXTRA_BODY ?? null,
+      totalTokensReminder:
+        process.env.CLAUDE_CODE_TOTAL_TOKENS_REMINDER ?? null,
     }),
   );
 }
@@ -167,19 +184,65 @@ if (sdkServer) {
 
 const streamEvent = (event) => emit({ type: "stream_event", event });
 
-const messageStart = () =>
+let messageSeq = 0;
+/** The id of the API message being streamed. */
+let messageId;
+/** The current turn's keywords that change what is streamed or reported. */
+let turnFlags = { overage: false, mismatch: false };
+
+const messageStart = () => {
+  messageId = `msg_stub_${process.pid}_${++messageSeq}`;
   streamEvent({
     type: "message_start",
-    message: { usage: { input_tokens: 5, output_tokens: 0 } },
+    message: {
+      id: messageId,
+      usage: {
+        input_tokens: 5,
+        output_tokens: 0,
+        cache_creation_input_tokens: 7,
+        cache_creation: {
+          ephemeral_5m_input_tokens: 0,
+          ephemeral_1h_input_tokens: 7,
+        },
+      },
+    },
+  });
+};
+
+/** The CLI's own record of a finished block, written before its stop. */
+const recordBlock = (block) =>
+  emit({
+    type: "assistant",
+    message: {
+      id: messageId,
+      role: "assistant",
+      model: "stub",
+      content: [block],
+      stop_reason: null,
+    },
+    parent_tool_use_id: null,
+    session_id: "stub-session",
   });
 
-const messageEnd = (stopReason) => {
+const messageEnd = (stopReason, stopDetails = null) => {
   streamEvent({
     type: "message_delta",
-    delta: { stop_reason: stopReason },
-    usage: { output_tokens: 3 },
+    delta: { stop_reason: stopReason, stop_details: stopDetails },
+    usage: { output_tokens: 3, output_tokens_details: { thinking_tokens: 2 } },
   });
   streamEvent({ type: "message_stop" });
+  emit({
+    type: "rate_limit_event",
+    rate_limit_info: {
+      status: "allowed",
+      resetsAt: 1792971000,
+      rateLimitType: "five_hour",
+      overageStatus: turnFlags.overage ? "allowed" : "rejected",
+      isUsingOverage: turnFlags.overage,
+    },
+    uuid: "stub-rate-limit",
+    session_id: "stub-session",
+  });
 };
 
 const textBlock = (index, text) => {
@@ -192,6 +255,10 @@ const textBlock = (index, text) => {
     type: "content_block_delta",
     index,
     delta: { type: "text_delta", text },
+  });
+  recordBlock({
+    type: "text",
+    text: turnFlags.mismatch ? text.replace("OK", "KO") : text,
   });
   streamEvent({ type: "content_block_stop", index });
 };
@@ -242,6 +309,7 @@ const toolTurn = async (piToolNames) => {
       index: use.index,
       delta: { type: "input_json_delta", partial_json: JSON.stringify(input) },
     });
+    recordBlock({ type: "tool_use", id: use.toolUseId, name: use.name, input });
     streamEvent({ type: "content_block_stop", index: use.index });
   }
 
@@ -286,6 +354,10 @@ const startTurn = (text) => {
   if (process.env.CLAUDE_STUB_PID_FILE)
     fs.writeFileSync(process.env.CLAUDE_STUB_PID_FILE, String(process.pid));
   emit({ type: "system", subtype: "init", session_id: "stub-session" });
+  turnFlags = {
+    overage: text.includes("overage"),
+    mismatch: text.includes("mismatch"),
+  };
   const tool = /tools?:([A-Za-z0-9_,-]+)/.exec(text);
   if (tool) {
     toolTurn(tool[1].split(",")).catch(endInterruptedTurn);
@@ -307,6 +379,11 @@ const startTurn = (text) => {
       type: "content_block_delta",
       index: 0,
       delta: { type: "signature_delta", signature: "STUB-SIGNATURE" },
+    });
+    recordBlock({
+      type: "thinking",
+      thinking: "STUB-THOUGHT",
+      signature: "STUB-SIGNATURE",
     });
     streamEvent({ type: "content_block_stop", index: 0 });
     textBlock(1, "PORT-OK");
@@ -347,6 +424,17 @@ const startTurn = (text) => {
     messageStart();
     process.stderr.write("stub: fatal: simulated crash\n");
     setTimeout(() => process.exit(3), 20);
+    return;
+  }
+  if (text.includes("refuse")) {
+    messageStart();
+    messageEnd("refusal", {
+      type: "refusal",
+      category: "stub",
+      explanation: "STUB-REFUSAL",
+    });
+    turnActive = false;
+    success();
     return;
   }
   if (text.includes("failturn")) {

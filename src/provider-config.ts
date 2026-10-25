@@ -7,6 +7,7 @@
  */
 
 import { Config, Context, Duration, Effect, Layer, Option } from "effect";
+import { ALLOW_USAGE_CREDITS_ENV } from "./usage-credits.ts";
 
 /** How much of the CLI's stdout is recorded on the `episode` span. */
 export type TraceWireDetail = "counts" | "events" | "raw";
@@ -44,6 +45,12 @@ export interface IProviderConfig {
   readonly traceWireDetail: TraceWireDetail;
   /** How a fresh process is given pi's history (`PI_CLAUDE_CLI_IMPORT`). */
   readonly historyImport: HistoryImport;
+  /**
+   * True lets model calls be charged to usage credits instead of plan
+   * limits (`PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS=1`). False, the default, ends
+   * an episode with an error once the CLI reports such a charge.
+   */
+  readonly allowUsageCredits: boolean;
 }
 
 /** Provides the provider configuration. */
@@ -149,6 +156,7 @@ export const makeProviderConfig = Effect.gen(function* () {
     restrictedMode: simple || safe,
     traceWireDetail: yield* traceWireDetail,
     historyImport: yield* historyImport,
+    allowUsageCredits: yield* envFlag(ALLOW_USAGE_CREDITS_ENV),
   });
 });
 

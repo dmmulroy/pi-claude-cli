@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { launchEnvironment } from "../src/claude-cli";
 import {
-  launchEnvironment,
   SUBSCRIPTION_OVERRIDE_ENV_VARS,
-} from "../src/claude-cli";
+  withoutSubscriptionOverrides,
+} from "../src/subscription-env";
 
 describe("the CLI's child-only environment", () => {
   const env = launchEnvironment("3600000");
@@ -29,11 +30,34 @@ describe("the CLI's child-only environment", () => {
       "ANTHROPIC_API_KEY",
       "ANTHROPIC_AUTH_TOKEN",
       "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_FOUNDRY_API_KEY",
+      "ANTHROPIC_FOUNDRY_AUTH_TOKEN",
+      "ANTHROPIC_AWS_API_KEY",
+      "CLAUDE_CODE_USE_BEDROCK",
+      "CLAUDE_CODE_USE_MANTLE",
+      "CLAUDE_CODE_USE_VERTEX",
+      "CLAUDE_CODE_USE_FOUNDRY",
+      "CLAUDE_CODE_USE_ANTHROPIC_AWS",
     ]);
     for (const name of SUBSCRIPTION_OVERRIDE_ENV_VARS) {
       expect(name in env).toBe(true);
       expect(env[name]).toBeUndefined();
     }
+  });
+
+  it("removes the same variables from an environment it is given", () => {
+    const kept = withoutSubscriptionOverrides({
+      ANTHROPIC_API_KEY: "sk",
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      PATH: "/bin",
+    });
+    expect(kept).toEqual({ PATH: "/bin" });
+  });
+
+  it("keeps the CLI's own additions out of pi's requests", () => {
+    expect(env.CLAUDE_CODE_TOTAL_TOKENS_REMINDER).toBe("off");
+    expect("CLAUDE_CODE_EXTRA_BODY" in env).toBe(true);
+    expect(env.CLAUDE_CODE_EXTRA_BODY).toBeUndefined();
   });
 
   it("passes the MCP tool timeout through and keeps the isolation switches", () => {

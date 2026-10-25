@@ -38,7 +38,11 @@ import {
   Ref,
 } from "effect";
 import { ClaudeProcessPool } from "./claude-process-pool.ts";
-import type { IClaudeProcess, RetireCause } from "./claude-process.ts";
+import type {
+  IClaudeProcess,
+  ReportedRateLimit,
+  RetireCause,
+} from "./claude-process.ts";
 import { cliMessageLabel, type ClaudeResultMessage } from "./cli-protocol.ts";
 import {
   decideEpisodeMode,
@@ -51,6 +55,9 @@ import {
   CliResultError,
   type EpisodeError,
   InactivityTimeout,
+  ModelStopError,
+  StreamMismatchError,
+  UsageCreditsChargeError,
 } from "./errors.ts";
 import type { EventBridge } from "./event-bridge.ts";
 import { mcpToolDefinitions, mcpToolResultFromPi } from "./mcp-inband.ts";
@@ -63,9 +70,16 @@ import {
 } from "./pi-context.ts";
 import { ProviderConfig } from "./provider-config.ts";
 import { RuntimeDirectory } from "./runtime-directory.ts";
-import { resolveCliThinking } from "./thinking-config.ts";
+import {
+  providerThinkingLevel,
+  resolveCliThinking,
+} from "./thinking-config.ts";
 import { isHandoffClaudeTool } from "./tool-mapping.ts";
 import { recordSpanEvent } from "./tracing.ts";
+import {
+  isChargedToUsageCredits,
+  usageCreditsChargeMessage,
+} from "./usage-credits.ts";
 import {
   addTokenUsage,
   maxTokenUsage,
@@ -193,6 +207,28 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
 
   /** The process this episode holds and has not yet parked or retired. */
   const borrowed = yield* Ref.make(Option.none<IClaudeProcess>());
+
+  /**
+   * Keep the subscription's limit status on pi's message, and end the
+   * episode when it says a model call was charged to usage credits and the
+   * user has not allowed that. The call is paid for already; ending here
+   * keeps pi's agent loop from making more.
+   */
+  const checkRateLimit = Effect.fnUntraced(function* ({
+    info,
+    reportedAtMillis,
+  }: ReportedRateLimit) {
+    yield* Effect.sync(() => bridge.recordRateLimit(info, reportedAtMillis));
+    const charged = isChargedToUsageCredits(info);
+    yield* Effect.annotateCurrentSpan({
+      "rateLimit.status": info.status ?? "unknown",
+      "rateLimit.usageCredits": charged,
+    });
+    if (charged && !config.allowUsageCredits)
+      return yield* new UsageCreditsChargeError({
+        message: usageCreditsChargeMessage(info),
+      });
+  });
 
   // ---- 1. Reuse the session's parked process, or launch a fresh one ---------
 
@@ -386,6 +422,15 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
             isHandoffClaudeTool(event.content_block.name ?? "")
           )
             sawToolCall = true;
+          // Every block's record is written before its content_block_stop,
+          // so at message_stop the whole message can be checked.
+          if (event.type === "message_stop" && !selfInterrupted) {
+            const mismatch = bridge.streamMismatch();
+            if (mismatch !== undefined)
+              return yield* new StreamMismatchError({
+                message: `The Claude CLI's stream was inconsistent: ${mismatch}. Retry the request.`,
+              });
+          }
           if (
             event.type === "message_stop" &&
             sawToolCall &&
@@ -402,6 +447,21 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
             selfInterrupted = true;
             yield* process.interruptTurn;
           }
+          continue;
+        }
+        if (message._tag === "AssistantMessage") {
+          const id = message.id;
+          if (Option.isSome(id) && !selfInterrupted)
+            yield* Effect.sync(() =>
+              bridge.recordAssistantBlocks(id.value, message.content),
+            );
+          continue;
+        }
+        if (message._tag === "RateLimit") {
+          yield* checkRateLimit({
+            info: message.info,
+            reportedAtMillis: yield* Clock.currentTimeMillis,
+          });
           continue;
         }
         if (message._tag !== "Result") continue;
@@ -496,6 +556,14 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     });
     if (Option.isSome(episodeSpan))
       episodeSpan.value.addLinks([{ span: process.span, attributes: {} }]);
+    const level = providerThinkingLevel(model, yield* process.thinking);
+    yield* Effect.sync(() => bridge.setProviderThinkingLevel(level));
+    // A status that arrived after the previous episode handed off: the call
+    // it is about was that episode's, and nothing more is sent if it was
+    // charged to usage credits.
+    const earlierRateLimit = yield* process.rateLimit;
+    if (Option.isSome(earlierRateLimit))
+      yield* checkRateLimit(earlierRateLimit.value);
 
     const delta = deltaMessages(messages);
     if (mode === "handoff") {
@@ -519,6 +587,15 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (
     }
 
     const { end, turnReportedBefore } = yield* readTurn(process);
+    // A refusal or a safety stop is an error, and its process is retired:
+    // pi drops a failed turn from its history, so nothing could continue it.
+    const stopped = bridge.getOutput();
+    if (stopped.stopReason === "error")
+      return yield* new ModelStopError({
+        stopReason: stopped.rawStopReason ?? "unknown",
+        message:
+          stopped.errorMessage ?? "The model stopped without an answer",
+      });
     // Parked before the fiber exits: `done` is pushed after the exit, so the
     // process is already there when pi issues its next call.
     yield* Effect.uninterruptible(release(process, end, turnReportedBefore));

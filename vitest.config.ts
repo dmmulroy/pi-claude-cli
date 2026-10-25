@@ -12,13 +12,16 @@ export default defineConfig({
       // services are gated by `npm run test:scenarios` instead.
       include: [
         "src/account-models.ts",
+        "src/cli-auth.ts",
         "src/event-bridge.ts",
         "src/overflow.ts",
         "src/pi-context.ts",
         "src/signed-thinking.ts",
+        "src/subscription-env.ts",
         "src/thinking-config.ts",
         "src/tool-call-id.ts",
         "src/tool-mapping.ts",
+        "src/usage-credits.ts",
       ],
       thresholds: {
         lines: 92,

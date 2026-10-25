@@ -25,6 +25,7 @@ import {
   Path,
   Ref,
   Runtime,
+  Schedule,
   Stream,
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
@@ -662,9 +663,7 @@ const tailCommand = Command.make(
         );
       }
     }).pipe(Effect.catchTag("PlatformError", () => Effect.void));
-    yield* Effect.forever(
-      drain.pipe(Effect.andThen(Effect.sleep(TAIL_POLL_INTERVAL))),
-    );
+    yield* drain.pipe(Effect.repeat(Schedule.spaced(TAIL_POLL_INTERVAL)));
   }),
 ).pipe(Command.withDescription("Follow the trace file live"));
 

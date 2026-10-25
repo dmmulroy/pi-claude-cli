@@ -175,6 +175,23 @@ export function cliThinkingLevelMap(model: {
   return { ...map, minimal: null };
 }
 
+/**
+ * The provider-native thinking level a response ran at, for pi's
+ * `providerThinkingLevel`: the effort, on an adaptive model with thinking on.
+ * A budget model ignores the effort, so it has no level to report, and
+ * neither does a response without thinking.
+ *
+ * `model` is this provider's registered model: adaptive ones are those whose
+ * map `cliThinkingLevelMap` gave `minimal: null`.
+ */
+export function providerThinkingLevel(
+  model: { thinkingLevelMap?: ThinkingLevelMap | null },
+  thinking: CliThinking,
+): CliEffortLevel | undefined {
+  if (thinking.kind !== "enabled") return undefined;
+  return model.thinkingLevelMap?.minimal === null ? thinking.effort : undefined;
+}
+
 /** CLI flags for a spawn that should start with `thinking`. */
 export function thinkingSpawnArgs(thinking: CliThinking): string[] {
   switch (thinking.kind) {

@@ -39,7 +39,7 @@ import {
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { SUBSCRIPTION_OVERRIDE_ENV_VARS } from "../../src/claude-cli.ts";
+import { SUBSCRIPTION_OVERRIDE_ENV_VARS } from "../../src/subscription-env.ts";
 import {
   INBAND_MCP_CONFIG_JSON,
   INBAND_MCP_SERVER_NAME,

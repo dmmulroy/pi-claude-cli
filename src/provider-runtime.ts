@@ -45,6 +45,7 @@ import {
 } from "./runtime-directory.ts";
 import { endStreamWithDone, endStreamWithError } from "./terminal-event.ts";
 import { tracingLayer } from "./tracing.ts";
+import { describeUsageCreditsRejection } from "./usage-credits.ts";
 
 /** The services an episode runs on. */
 export type ProviderServices =
@@ -64,6 +65,11 @@ export interface ProviderRuntime {
   ) => void;
   /** Retire every parked CLI process; pi's history was replaced or rewritten. */
   readonly retireParkedProcesses: () => Promise<void>;
+  /**
+   * Retire the process parked for one pi session, which pi has disposed;
+   * every parked process when pi names no session.
+   */
+  readonly retireSession: (piSessionId: string | undefined) => Promise<void>;
   /** End every CLI process and release the runtime. It cannot be used again. */
   readonly dispose: () => Promise<void>;
 }
@@ -95,8 +101,8 @@ export const providerLayer = Layer.merge(
   buildSpanLayer.pipe(Layer.provide(servicesLayer)),
 ).pipe(Layer.provideMerge(tracingLayer));
 
-/** The message pi shows for a failed episode. */
-const failureMessage = (cause: Cause.Cause<unknown>): string => {
+/** The error text of a failed episode, as the failure states it. */
+const causeMessage = (cause: Cause.Cause<unknown>): string => {
   const error = Cause.findErrorOption(cause);
   if (Option.isSome(error)) {
     const value = error.value;
@@ -104,6 +110,15 @@ const failureMessage = (cause: Cause.Cause<unknown>): string => {
       return value.message;
   }
   return Cause.pretty(cause);
+};
+
+/**
+ * The message pi shows for a failed episode. Anthropic's refusal to serve a
+ * request on plan limits is rewritten into a billing error pi does not retry.
+ */
+const failureMessage = (cause: Cause.Cause<unknown>): string => {
+  const message = causeMessage(cause);
+  return describeUsageCreditsRejection(message) ?? message;
 };
 
 /** Turn an episode's exit into the stream's one terminal event. */
@@ -137,6 +152,11 @@ export const startProviderRuntime = <E>(
     const pool = yield* ClaudeProcessPool;
     yield* pool.retireAll("shutdown");
   });
+  const retireParkedSession = (piSessionId: string) =>
+    Effect.gen(function* () {
+      const pool = yield* ClaudeProcessPool;
+      yield* pool.retireSession(piSessionId, "shutdown");
+    });
   return {
     startEpisode: (piStream, model, context, options) => {
       const bridge = createEventBridge(piStream, model);
@@ -156,6 +176,14 @@ export const startProviderRuntime = <E>(
     },
     retireParkedProcesses: () =>
       runtime.runPromise(retireParked).catch(() => undefined),
+    retireSession: (piSessionId) =>
+      runtime
+        .runPromise(
+          piSessionId === undefined
+            ? retireParked
+            : retireParkedSession(piSessionId),
+        )
+        .catch(() => undefined),
     dispose: async () => {
       await runtime
         .runPromise(

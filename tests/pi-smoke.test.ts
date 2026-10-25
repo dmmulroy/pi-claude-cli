@@ -1,5 +1,11 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -8,7 +14,8 @@ import { afterAll, describe, expect, it } from "vitest";
 /**
  * Smoke test against the pi this repository installs: the real pi binary
  * loads the working tree as an extension and lists the provider's models.
- * No Claude CLI is involved; nothing is launched until a model is called.
+ * The only CLI involved is the stub answering `claude auth status`, which
+ * the provider's auth check asks; no model is called.
  */
 
 const repo = resolve(__dirname, "..");
@@ -30,7 +37,8 @@ describe("the installed pi", () => {
     expect(Number(piPackage.version.split(".")[0])).toBeGreaterThanOrEqual(1);
   });
 
-  it("loads the extension and registers the pi-claude-cli provider", async () => {
+  /** The provider's rows of `pi --list-models`, with `claude` found on `path`. */
+  const listedModels = async (name: string, path: string) => {
     const { stdout } = await promisify(execFile)(
       process.execPath,
       [
@@ -49,18 +57,34 @@ describe("the installed pi", () => {
         timeout: 60_000,
         env: {
           ...process.env,
-          PI_CODING_AGENT_DIR: join(scratch, "agent"),
-          XDG_STATE_HOME: join(scratch, "state"),
+          PI_CODING_AGENT_DIR: join(scratch, name, "agent"),
+          XDG_STATE_HOME: join(scratch, name, "state"),
           PI_CLAUDE_CLI_TRACE: "off",
-          // No `claude` to find: registration must not need one.
-          PATH: dirname(process.execPath),
+          PATH: path,
         },
       },
     );
-    const rows = stdout
+    return stdout
       .split("\n")
       .filter((line) => line.startsWith("pi-claude-cli"));
+  };
+
+  it("loads the extension and registers the pi-claude-cli provider", async () => {
+    // The stub CLI, logged in: the provider is configured.
+    const bin = join(scratch, "bin");
+    mkdirSync(bin, { recursive: true });
+    copyFileSync(join(repo, "tests/e2e/claude-stub.cjs"), join(bin, "claude"));
+    const rows = await listedModels(
+      "stub",
+      `${bin}:${dirname(process.execPath)}`,
+    );
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.some((row) => /\bclaude-haiku-4-5\b/.test(row))).toBe(true);
+  }, 90_000);
+
+  it("offers no models when there is no Claude CLI to use", async () => {
+    // No `claude` to find: registration still works, and pi hides the models.
+    const rows = await listedModels("none", dirname(process.execPath));
+    expect(rows).toEqual([]);
   }, 90_000);
 });
