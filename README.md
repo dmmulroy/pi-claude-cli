@@ -1,129 +1,253 @@
 # pi-claude-cli
 
-Use a Claude Pro/Max subscription from the [pi coding agent](https://github.com/earendil-works/pi). The official Claude Code CLI handles authentication and model access. pi owns the prompt, tools, conversation and compaction.
+Use your Claude Pro/Max subscription from the [pi coding agent](https://github.com/earendil-works/pi). The official Claude Code CLI handles login and model access. pi keeps the prompt, the tools, the conversation and compaction.
 
-This is a fork of [`agustinsacco/pi-claude-cli`](https://github.com/agustinsacco/pi-claude-cli) (git remote `upstream`), forked at 0.10.0. See [Differences from upstream](#differences-from-upstream).
-
-## Install
-
-In pi's `settings.json`:
-
-```json
-{ "packages": ["git:github.com/dmmulroy/pi-claude-cli"] }
+```mermaid
+flowchart LR
+    pi["pi<br/>prompt · tools · history · compaction"]
+    provider["pi-claude-cli<br/>(this package)"]
+    cli["claude CLI<br/>subscription login"]
+    api["Anthropic API"]
+    pi -- "model call" --> provider
+    provider -- "stdin / stdout<br/>NDJSON" --> cli
+    cli --> api
+    provider -- "streamed text, thinking,<br/>tool calls" --> pi
 ```
 
-Pick a model under `pi-claude-cli` with `/model`.
+This is a fork of [`agustinsacco/pi-claude-cli`](https://github.com/agustinsacco/pi-claude-cli), forked at 0.10.0. See [Differences from upstream](#differences-from-upstream).
 
-Requires macOS or Linux, Node 22+, pi, and an authenticated `claude` binary on PATH (Claude Code 2.1.265+). Windows is not supported. Subscription credentials stay in the official CLI; no API key extraction.
+## Quick start
 
-Log in and out with Claude Code itself (`claude auth login`, `claude auth logout`); pi's `/login` only says so. pi offers the provider's models while `claude auth status` reports the CLI installed and not logged out, and labels their cost "(sub)" for a Pro or Max login. `/pi-claude-cli-status` asks the CLI again and says what it found. The answer is kept in `auth-status.json` under the state directory (installed, logged in, plan, when; no account details) and checked again in the background, so pi's start does not wait for the CLI. A too-old CLI is reported as an assistant error on the first model call.
+1. Install Claude Code (2.1.265 or newer) and log in:
 
-## One owner: pi
+   ```bash
+   claude auth login
+   ```
 
-- **Prompt:** pi's current system prompt replaces Claude Code's. A short suffix explains the MCP tool-name prefix. Project instructions, skills and `.pi` paths are unchanged; Claude does not independently discover any.
-- **Tools:** only the current request's tools are advertised, through an MCP server the provider hosts in-band on the CLI's own stdio control channel. Every tool, including read/edit/bash, executes in pi, so pi's tool hooks, schemas and complete results apply. The CLI has no native tools, and there is no socket or helper process.
-- **Conversation:** pi's history is authoritative. A warm Claude process is reused only while the history prefix it acknowledged and its launch configuration still match. Edits, compaction, provider changes, prompt changes or tool changes retire it, and the next call imports pi's current history into a fresh process.
-- **Storage:** Claude processes run with `--no-session-persistence`. No Claude conversation file or resume pairing is written. The staged system prompt file is removed after the call that launched the process; the private runtime directory is removed when the pi session shuts down. A SIGKILL can leave that directory behind. [Traces](#traces) hold no conversation content.
-- **Compaction:** pi compacts its own history. CLI auto-compaction is disabled.
-- **Status line:** nothing is written to pi's footer.
-- **pi's message:** besides the model's output, the assistant message records what pi's own Anthropic provider records: the API message id (`responseId`), the raw stop reason, the 1-hour share of the cache write and the thinking share of the output, and, on adaptive models, the effort (`providerThinkingLevel`). A `diagnostics` entry (`pi-claude-cli.rate-limit`) holds the subscription's latest limit status, and the signed thinking is kept under a `piClaudeCli` key (see below), not in `diagnostics`, which pi's bug report collects even when the session is left out. None of it is sent to the model.
+2. Add the package to pi, either with `pi install git:github.com/dmmulroy/pi-claude-cli` or in pi's `settings.json`:
 
-## Cost of a fresh process
+   ```json
+   { "packages": ["git:github.com/dmmulroy/pi-claude-cli"] }
+   ```
 
-Ordinary follow-ups and tool calls keep the warm process and send only the new content. A fresh process (after the idle timeout, a model switch, a history edit, compaction or a pi restart) is handed pi's whole history.
+3. In pi, run `/model` and pick a model under `pi-claude-cli`.
 
-**Structured import (the default):** the history goes in as the messages themselves: user messages that are added without asking the model, and assistant messages replayed as they were, with real `tool_use` and `tool_result` blocks in order, as pi's own Anthropic provider would send them. A tool call id Claude would reject (after a switch from another provider) is replaced on the wire by a stable valid one; pi's stored ids never change. Signed thinking goes back too: the provider stores Claude's raw thinking blocks on pi's assistant message (under `piClaudeCli`), and replays them with their signatures while the message is this provider's, the model is the one that signed them and the message's text and tool calls are unchanged. Thinking of an edited message, another model or another provider is replayed as plain text, never signed.
+**Requirements:** macOS or Linux, Node 22.18+, pi, and `claude` on `PATH`. Windows is not supported. No environment variables are required.
 
-It relies on stdin behaviour Claude Code does not document. It was checked against the real API on 2.1.299 (`PI_OWNED_LIVE=1 npx vitest run tests/live-structured-import.test.ts tests/live-pi-roundtrip.test.ts`): signed thinking is accepted back and a history with another provider's turns and a compaction imports cleanly. On a CLI older than 2.1.292, and whenever the CLI does not confirm a held message, the provider falls back to the text import. `PI_CLAUDE_CLI_IMPORT=flat` always uses it: one user message of role-labelled text, with tool calls as records (`TOOL CALL <name> id=…`) and no thinking.
+## Authentication
 
-**No prompt cache across processes:** a fresh process pays for the whole history again, whichever import is used. Claude Code adds its startup reminders (environment, date) to the first user message it sends the model, which in a fresh process is the latest one rather than the first, so the request differs from the warm one from its first message on. This was measured, not assumed; the live test above reports the cache use. That is why a parked process waits an hour by default, as long as Claude Code's prompt cache lasts: each parked process holds roughly 500 MB while it waits.
+Claude Code owns the login; the provider never reads or extracts OAuth tokens.
 
-See [the context contract](docs/CONTEXT-POLICY.md) for the details.
+| You want to…       | Do this                                      |
+| ------------------ | -------------------------------------------- |
+| Log in / log out   | `claude auth login` / `claude auth logout`   |
+| Check what pi sees | `/pi-claude-cli-status` in pi                |
+| Use pi's `/login`  | It only tells you to use `claude auth login` |
+
+pi offers this provider's models while `claude auth status` says the CLI is installed and not logged out, and labels their cost "(sub)" for a Pro or Max login. The answer is cached in `auth-status.json` under the state directory (installed, logged in, plan, when; no account details) and refreshed in the background, so pi's start does not wait for the CLI. A CLI older than 2.1.265 is reported as an assistant error on the first model call.
+
+## How it works
+
+pi stays the only owner of the conversation. A Claude process is a disposable cache of pi's history, never a second ledger.
+
+| pi owns         | What that means here                                                                                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Prompt**      | pi's system prompt replaces Claude Code's (plus a short note about the MCP tool-name prefix). Claude discovers no CLAUDE.md, skills or memory of its own.                |
+| **Tools**       | Only the current request's tools are offered, through an MCP server hosted in-band on the CLI's own control channel. Every tool runs in pi. The CLI has no native tools. |
+| **History**     | A warm process is reused only while its acknowledged history and launch settings still match pi's. Otherwise a fresh process gets pi's current history.                  |
+| **Compaction**  | pi compacts. The CLI's auto-compaction and its own API retries are off.                                                                                                  |
+| **Storage**     | `--no-session-persistence`: no Claude transcript, no `--resume`. Temp files live in a private directory removed at session shutdown (a SIGKILL can leave it).            |
+| **Status line** | Nothing is written to pi's footer.                                                                                                                                       |
+
+### A turn with a tool call
+
+The CLI's tool call is held open while pi runs the tool, so the same process continues with the result:
+
+```mermaid
+sequenceDiagram
+    participant pi
+    participant P as pi-claude-cli
+    participant CLI as claude CLI
+    pi->>P: model call (history, prompt, tools)
+    P->>CLI: user message
+    CLI-->>P: streamed text / thinking
+    P-->>pi: assistant events
+    CLI->>P: MCP tools/call (in-band)
+    P-->>pi: toolCall block, stream ends
+    Note over CLI: waits on tools/call
+    pi->>pi: run tool (hooks, guards, full result)
+    pi->>P: next model call with tool result
+    P->>CLI: answer the held tools/call
+    CLI-->>P: rest of the turn
+    P-->>pi: done
+    Note over P,CLI: process parked for the session's next call
+```
+
+### Warm or fresh
+
+```text
+on(model call)
+  if a parked process has the same history prefix and launch signature
+    send only the new messages                       # cheap
+  else
+    retire it, launch a fresh process, import pi's whole history
+```
+
+The launch signature is the model, system prompt, working directory, handoff mode and host settings file. Edits, compaction, a model switch, a prompt change, a pi restart or the idle timeout all mean a fresh process. Thinking-level and tool-list changes are applied to the live process instead.
+
+### Cost of a fresh process
+
+A fresh process pays for the whole history again: there is no prompt cache across processes (measured, not assumed). That is why a parked process waits an hour by default, as long as Claude Code's prompt cache lasts. Each parked process holds about 500 MB while it waits; `PI_CLAUDE_CLI_KEEPALIVE_MS` changes this.
+
+By default the history goes in **structured**: the messages themselves, with real `tool_use` / `tool_result` blocks, as pi's own Anthropic provider would send them. Claude's signed thinking is replayed with its signatures while the message is unchanged and from the same model; otherwise as plain text. Tool call ids Claude would reject (from another provider) are mapped to valid ones on the wire; pi's stored ids never change.
+
+This relies on undocumented CLI stdin behaviour, checked against the real API on 2.1.299. On a CLI older than 2.1.292, or if the CLI does not confirm the import, the provider falls back to a **flat** import: one role-labelled text message, no thinking. `PI_CLAUDE_CLI_IMPORT=flat` always uses it.
+
+Details: [docs/CONTEXT-POLICY.md](docs/CONTEXT-POLICY.md).
+
+### Thinking
+
+pi's thinking levels map to the request pi's own Anthropic provider would send: `off` disables thinking, other levels send pi's budget or effort with summaries. A level changed mid-session applies from the next turn without restarting the CLI.
+
+## Usage-credit guard
+
+Claude Code reports the subscription's limit status after each API call. When a call was charged to **usage credits** (formerly "extra usage") instead of plan limits:
+
+```text
+on(limit status says "usage credits")
+  if PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS=1
+    continue
+  else
+    end the call with a "billing" error      # pi does not retry it
+    if a tool call is already with pi
+      stop the next call before the result is sent
+```
+
+The charged call is paid for, but pi's agent loop makes no more. Anthropic's refusal to serve a request on plan limits ("third-party apps now draw from your extra usage") is reported the same way. The latest status is kept on each assistant message as the `pi-claude-cli.rate-limit` diagnostic.
 
 ## Configuration
 
-No environment variables are required.
+All optional. A value that does not parse falls back to its default.
 
 | Variable                            | Default      | Purpose                                                                        |
 | ----------------------------------- | ------------ | ------------------------------------------------------------------------------ |
 | `PI_CLAUDE_CLI_KEEPALIVE_MS`        | `3600000`    | Idle lifetime of a parked process; `0` parks nothing                           |
-| `PI_CLAUDE_CLI_SETTINGS`            | unset        | Explicit Claude Code settings file (hooks, permissions) passed as `--settings` |
 | `PI_CLAUDE_CLI_TIMEOUT_MS`          | `300000`     | Longest stdout silence while a call is attached; then an error and a kill      |
 | `PI_CLAUDE_CLI_HANDOFF_WAIT_MS`     | `1800000`    | Maximum wait for pi to answer a tool call                                      |
 | `PI_CLAUDE_CLI_HANDOFF_PROXY`       | on           | `0` interrupts the turn at each tool call instead of holding it open           |
+| `PI_CLAUDE_CLI_IMPORT`              | `structured` | `flat` gives a fresh process the history as one text message                   |
+| `PI_CLAUDE_CLI_MODELS`              | account      | `builtin` lists pi's whole Anthropic catalogue instead of the account's models |
+| `PI_CLAUDE_CLI_THINKING_DISPLAY`    | `summarized` | `omitted` returns no thinking summaries                                        |
+| `PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS` | unset        | `1` lets model calls be charged to usage credits                               |
+| `PI_CLAUDE_CLI_SETTINGS`            | unset        | Explicit Claude Code settings file (hooks, permissions) passed as `--settings` |
 | `PI_CLAUDE_CLI_TRACE`               | daily file   | Trace file path, or `off`; see [Traces](#traces)                               |
 | `PI_CLAUDE_CLI_TRACE_WIRE`          | counts       | `1` records one event per wire message; `raw` records raw lines, with content  |
-| `PI_CLAUDE_CLI_THINKING_DISPLAY`    | `summarized` | `omitted` returns no thinking summaries                                        |
 | `MCP_TOOL_TIMEOUT`                  | `3600000`    | CLI-side MCP call timeout                                                      |
-| `PI_CLAUDE_CLI_MODELS`              | account      | `builtin` lists pi's whole Anthropic catalogue instead of the account's models |
-| `PI_CLAUDE_CLI_IMPORT`              | `structured` | `flat` gives a fresh process the history as one text message; see above        |
-| `PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS` | unset        | `1` lets model calls be charged to usage credits; see below                    |
 
-Variables that would move the CLI off the subscription login are never forwarded to it: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `ANTHROPIC_AWS_API_KEY` and the provider switches `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_MANTLE`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` and `CLAUDE_CODE_USE_ANTHROPIC_AWS`. Neither is a host's `CLAUDE_CODE_EXTRA_BODY`, which would change every request. A value that does not parse falls back to its default.
-
-### Usage credits
-
-Claude Code reports the subscription's limit status after API calls. When it says a call was charged to usage credits (formerly "extra usage") instead of plan limits, the call ends with an error that says so, and pi does not retry it: the call is paid for, but pi's agent loop makes no more. A status that arrives after a tool call was handed to pi stops the next call before the tool result is sent. Anthropic's own refusal to serve a request on plan limits ("third-party apps now draw from your extra usage") is reported the same way. `PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS=1` lets the calls go on. The latest status is kept on each assistant message as the `pi-claude-cli.rate-limit` diagnostic.
-
-pi's thinking levels reach the model as the request pi's own Anthropic provider would send: `off` disables thinking, other levels send pi's budget or effort with thinking summaries. A level changed mid-session applies from the next turn without restarting the CLI.
-
-A changed tool list also reaches the live process: the in-band MCP server tells the CLI its tools changed, the CLI lists them again, and the model is offered the new list from its next request, including the one that follows an open tool call.
+**Never forwarded to the CLI**, because they would move it off the subscription login: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `ANTHROPIC_AWS_API_KEY`, and the switches `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_MANTLE`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY`, `CLAUDE_CODE_USE_ANTHROPIC_AWS`. A host's `CLAUDE_CODE_EXTRA_BODY` is dropped too. Explicit host guards and managed policy still apply.
 
 ## Models
 
-On pi 1.x the model list is the account's. Claude Code reports the models an account offers in its `initialize` handshake; the provider asks a short-lived CLI process for them (no model call, no tokens), keeps the ones pi's Anthropic catalogue knows with pi's own limits, cost and thinking levels, and adds any the catalogue does not know yet with conservative limits. pi persists the result, so a session starts from the stored list and the CLI is asked again when it is a day old or pi forces a refresh. Until the first refresh, when the CLI cannot be asked, and on pi before 1.x, the list is pi's whole Anthropic catalogue.
+On pi 1.x the list is your account's:
 
-The CLI's list is its model picker for the account, not a hard access check: a model missing from it may still run. `PI_CLAUDE_CLI_MODELS=builtin` keeps the whole catalogue.
+```mermaid
+flowchart LR
+    probe["short-lived claude process<br/>initialize handshake<br/>(no model call, no tokens)"]
+    join["join with pi's Anthropic catalogue<br/>(limits, cost, thinking levels)"]
+    store["pi stores the list<br/>refreshed when a day old"]
+    probe --> join --> store
+```
+
+Models pi's catalogue does not know yet are added with conservative limits. Before the first refresh, when the CLI cannot be asked, and on pi before 1.x, the list is pi's whole Anthropic catalogue. The CLI's list is its model picker, not an access check: a missing model may still run. `PI_CLAUDE_CLI_MODELS=builtin` keeps the whole catalogue.
+
+## What's on pi's message
+
+Besides the model's output, each assistant message carries what pi's own Anthropic provider records: `responseId`, the raw stop reason, the usage breakdown (1-hour cache write share, thinking share of output) and, on adaptive models, `providerThinkingLevel`. The `pi-claude-cli.rate-limit` diagnostic holds the latest limit status. Signed thinking is stored under a `piClaudeCli` key, not in `diagnostics`, which pi's bug report collects. None of this is sent to the model.
 
 ## Traces
 
-The provider records what it does as spans: one per model call, per CLI launch, per process lifetime, per tool call, per retirement. They are written as NDJSON to `~/.local/state/pi-claude-cli/traces/<date>.ndjson` (or under `$XDG_STATE_HOME`), in a `0700` directory with `0600` files, and files not written for seven days are removed. `PI_CLAUDE_CLI_TRACE=<path>` writes elsewhere and `PI_CLAUDE_CLI_TRACE=off` writes nothing. A failed write turns tracing off for the session and never fails a model call.
+Every model call, CLI launch, process lifetime, tool call and retirement is a span, written as NDJSON:
 
-Traces are not a transcript. They hold ids, tool names, sizes, counts and durations, and never prompt text, tool arguments or tool results. The one exception is `PI_CLAUDE_CLI_TRACE_WIRE=raw`, which records the CLI's raw output for protocol debugging.
+```text
+~/.local/state/pi-claude-cli/traces/     # or $XDG_STATE_HOME/pi-claude-cli/traces/
+└── <date>.ndjson                        # 0600 files in a 0700 directory, pruned after 7 idle days
+```
 
-From a checkout of this repository:
+Traces are **not a transcript**: ids, tool names, sizes, counts and durations, never prompt text, tool arguments or tool results. The one exception is `PI_CLAUDE_CLI_TRACE_WIRE=raw`, for protocol debugging. `PI_CLAUDE_CLI_TRACE=<path>` writes elsewhere, `=off` writes nothing. A failed write turns tracing off for the session and never fails a model call.
+
+From a checkout:
 
 ```bash
-npm run trace -- tree --last     # the most recent model call, as a span tree
-npm run trace -- ls              # one line per trace
-npm run trace -- open            # spans that never ended
-npm run trace -- stats           # count and duration by span name
+vp run trace -- tree --last     # the most recent model call, as a span tree
+vp run trace -- ls              # one line per trace
+vp run trace -- open            # spans that never ended
+vp run trace -- stats           # count and duration by span name
 ```
 
 ## Differences from upstream
 
-- **Single execution path.** Upstream's legacy "observer" mode is deleted: native Claude tools, `--resume` and the session-map sidecar, tool markers, sub-agent tracking, CLI-owned compaction, and the `PI_CLAUDE_CLI_CONTEXT`, `PI_CLAUDE_CLI_SYSTEM_PROMPT`, `PI_CLAUDE_CLI_AUTOCOMPACT`, `PI_CLAUDE_CLI_TOOL_RESULTS`, `PI_CLAUDE_CLI_HERMETIC`, `PI_CLAUDE_CLI_STRICT_MCP` and `PI_CLAUDE_CLI_EPHEMERAL` switches.
-- **Rewritten on Effect 4.** Each CLI process is one scope; an episode is one fiber whose exit ends pi's stream exactly once. See [effect-rewrite.md](effect-rewrite.md).
-- **Tools travel in-band.** The schema-only MCP server, its `node` child per CLI process, the unix socket and the shared secret are gone. Each process is told its own tool surface, so a concurrent tool-less request cannot leave the main turn without tools ([upstream #49](https://github.com/agustinsacco/pi-claude-cli/issues/49)).
-- **Traces.** On by default, private, content-free.
-- **No Windows support**, and no `cross-spawn` dependency.
-- **No status-line channels.** The `claude-rate-limit` and `claude-subagents` status keys are gone.
-- **Subscription-override env vars are stripped** from the CLI's environment, other model providers' switches included.
-- **Usage-credit guard**, refusals reported as errors, a check of each streamed message against the CLI's own record of it, and an auth check that hides the models when the CLI is missing or logged out.
-- **Captured stderr is capped** at the most recent 64 KiB per process.
-- **Not published to npm.**
+```diff
+ pi-claude-cli
+-├── observer mode: native Claude tools, --resume, session-map sidecar,
+-│   tool markers, sub-agent tracking, CLI-owned compaction
+-├── PI_CLAUDE_CLI_CONTEXT / _SYSTEM_PROMPT / _AUTOCOMPACT / _TOOL_RESULTS /
+-│   _HERMETIC / _STRICT_MCP / _EPHEMERAL
+-├── schema-only MCP server: node child per process, unix socket, shared secret
+-├── status-line keys claude-rate-limit, claude-subagents
+-├── Windows support, cross-spawn
+-├── npm package
++├── one execution path: pi owns prompt, tools, history, compaction
++├── rewritten on Effect 4: one scope per CLI process, one fiber per call
++├── in-band MCP, per-process tool surface (fixes upstream #49)
++├── traces: on by default, private, content-free
++├── subscription-override env vars stripped
++├── usage-credit guard, refusals as errors, stream checked against the CLI's record
++├── auth check hides models when the CLI is missing or logged out
++└── captured stderr capped at the latest 64 KiB per process
+```
+
+Upstream #49: [a concurrent tool-less request could leave the main turn without tools](https://github.com/agustinsacco/pi-claude-cli/issues/49). The design record of the rewrite is [effect-rewrite.md](effect-rewrite.md).
 
 ## Development
 
-```bash
-npm ci
-npm run typecheck
-npm run lint
-npm run format:check
-npm run test:coverage     # unit tests of the pure modules
-npm run test:scenarios    # the provider against a stub CLI, checked by trace assertions
-npm run test:e2e          # real pi, stub CLI
+```text
+index.ts                      # registers the provider, auth check, models, /pi-claude-cli-status
+src/
+├── provider-runtime.ts       # Effect runtime; one fiber per pi model call
+├── episode.ts                # one model call: take or launch, stream, hand off, park
+├── claude-process-pool.ts    # launches processes, parks one per pi session
+├── claude-process.ts         # one CLI process and everything it owns
+├── claude-cli.ts             # launch flags and environment
+├── mcp-inband.ts             # in-band MCP server for pi's tools
+├── event-bridge.ts           # CLI stream events → pi messages
+├── pi-context.ts             # history import and hashing
+└── …                         # see AGENTS.md
+scripts/                      # trace CLI, scenarios, e2e
+tests/                        # unit tests, stub CLI, opt-in live tests
 ```
 
-Scripts are TypeScript run directly by Node (22.18+). `npm run test:scenarios` and `npm run test:e2e` need `pi` on PATH.
+```bash
+vp install
+vp check                      # format, lint, types
+vp test                       # unit tests
+vp run test:coverage          # unit tests with coverage floors
+vp run test:scenarios         # provider against a stub CLI, checked by trace assertions
+vp run test:e2e               # real pi, stub CLI
+vp run trace -- tree --last
+vp run ready                  # check, unit, scenarios and e2e together
+```
 
-The opt-in real-CLI checks spend subscription tokens in a disposable workspace:
+Scripts are TypeScript run directly by Node (22.18+). `test:scenarios` and `test:e2e` need `pi` on `PATH`. To try the working tree in pi: `pi -ne -e <repo>`.
+
+The opt-in live checks spend subscription tokens in a disposable workspace:
 
 ```bash
 node scripts/scenarios.ts --live
-PI_OWNED_LIVE=1 npx vitest run tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts tests/live-structured-import.test.ts
+PI_OWNED_LIVE=1 vp test tests/live-pi-roundtrip.test.ts tests/live-thinking.test.ts tests/live-structured-import.test.ts
 ```
+
+Contributor notes: [AGENTS.md](AGENTS.md), [docs/coding-standards.md](docs/coding-standards.md).
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE). Forked from [agustinsacco/pi-claude-cli](https://github.com/agustinsacco/pi-claude-cli).
