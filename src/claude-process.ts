@@ -51,7 +51,7 @@ import {
 } from "./cli-protocol.ts";
 import { supportsStructuredImport } from "./cli-requirements.ts";
 import type { HistoryCheckpoint, LaunchSignature } from "./episode-mode.ts";
-import { ProcessExited, ProcessGone } from "./errors.ts";
+import { CliSpawnError, ProcessExited, ProcessGone } from "./errors.ts";
 import {
   INBAND_MCP_SERVER_NAME,
   MCP_TOOLS_CHANGED_METHOD,
@@ -64,7 +64,9 @@ import {
 import { type CliThinking, type ThinkingControl, thinkingControls } from "./thinking-config.ts";
 import { isHandoffClaudeTool, mcpToolNameOfClaudeTool } from "./tool-mapping.ts";
 import type { CliReplayFrame } from "./pi-context.ts";
+import type { RelayMode } from "./provider-config.ts";
 import { recordSpanEvent } from "./tracing.ts";
+import { type RelayRequestRecord, startTurnRelay, type TurnRelay } from "./turn-relay.ts";
 import { type TokenUsage, ZERO_TOKEN_USAGE } from "./usage.ts";
 
 /** Why a process was retired. */
@@ -126,6 +128,10 @@ export interface ClaudeProcessLaunch {
    * debugging only (`PI_CLAUDE_CLI_TRACE_WIRE=raw`).
    */
   readonly traceRawWire: boolean;
+  /** Route the CLI's API traffic through a turn relay of its own, and how. */
+  readonly relay: RelayMode;
+  /** Where the relay writes request bodies, if anywhere. */
+  readonly relayDump: Option.Option<string>;
 }
 
 /** A live Claude CLI process. A scoped value, not a contextual service. */
@@ -234,6 +240,46 @@ const EXIT_REPORT_GRACE = Duration.millis(500);
 const TOOL_EXECUTION_DENIED_MESSAGE = "Tool execution is unavailable in this environment.";
 const UNMATCHED_CALL_MESSAGE = "pi could not match this tool call to an assistant tool_use block";
 
+/** A relayed request as span attributes: facts and hashes, no content. */
+const relayRecordAttributes = (record: RelayRequestRecord): Record<string, unknown> => ({
+  sequence: record.sequence,
+  method: record.method,
+  path: record.path,
+  status: record.status,
+  requestBytes: record.requestBytes,
+  responseBytes: record.responseBytes,
+  ttfbMs: record.ttfbMs,
+  durationMs: record.durationMs,
+  ...(record.failure !== undefined ? { failure: record.failure } : {}),
+  ...(record.requestId !== undefined ? { requestId: record.requestId } : {}),
+  ...(record.stopReason !== undefined ? { stopReason: record.stopReason } : {}),
+  ...(record.streamError !== undefined ? { streamError: record.streamError } : {}),
+  ...(record.rewrite !== undefined ? { rewrite: record.rewrite } : {}),
+  ...(record.usage !== undefined
+    ? {
+        "usage.input": record.usage.input,
+        "usage.output": record.usage.output,
+        "usage.cacheRead": record.usage.cacheRead,
+        "usage.cacheWrite": record.usage.cacheWrite,
+        "usage.cacheWrite1h": record.usage.cacheWrite1h,
+      }
+    : {}),
+  ...(record.layout !== undefined
+    ? {
+        "layout.model": record.layout.model,
+        "layout.maxTokens": record.layout.maxTokens ?? 0,
+        "layout.thinking": record.layout.thinking,
+        "layout.betas": record.layout.betas,
+        "layout.system": record.layout.system.join(","),
+        "layout.tools": record.layout.tools,
+        "layout.toolCount": record.layout.toolCount,
+        "layout.messages": record.layout.messages.join(","),
+        "layout.messageCount": record.layout.messages.length,
+        "layout.cacheMarkers": record.layout.cacheMarkers.join(","),
+      }
+    : {}),
+});
+
 /** One `tool_use` block the model streamed and pi is expected to answer. */
 interface ExpectedToolCall {
   /** The tool the model asked for, by its name on the in-band MCP server. */
@@ -309,6 +355,36 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     });
   const endedBy = yield* Ref.make<"exited" | "killed">("exited");
 
+  // The relay lives in the process scope: retiring the process closes it.
+  const relay =
+    launch.relay !== "off"
+      ? Option.some(
+          yield* startTurnRelay({
+            label: launch.cliSessionId,
+            dumpRoot: Option.getOrUndefined(launch.relayDump),
+            rewrite: launch.relay === "rewrite",
+          }).pipe(
+            Effect.mapError(
+              (error) =>
+                new CliSpawnError({ message: `The turn relay could not start: ${error.message}` }),
+            ),
+          ),
+        )
+      : Option.none<TurnRelay>();
+  if (Option.isSome(relay))
+    yield* Queue.take(relay.value.records).pipe(
+      Effect.flatMap((record) =>
+        Effect.void.pipe(
+          Effect.withSpan("TurnRelay.request", {
+            parent: span,
+            attributes: relayRecordAttributes(record),
+          }),
+        ),
+      ),
+      Effect.forever,
+      Effect.forkScoped,
+    );
+
   const handle = yield* cli.spawn({
     cliSessionId: launch.cliSessionId,
     modelId: launch.modelId,
@@ -316,6 +392,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     cwd: launch.cwd,
     thinking: launch.thinking,
     stdin: Stream.fromQueue(outbound).pipe(Stream.encodeText),
+    baseUrl: Option.map(relay, (started) => started.baseUrl),
   });
   const pid = Number(handle.pid);
   span.attribute("pid", pid);

@@ -307,7 +307,6 @@ describe("structuredReplay", () => {
           type: "tool_result",
           tool_use_id: "toolu_01b",
           content: [{ type: "text", text: "only this one" }],
-          is_error: false,
         },
         {
           type: "tool_result",
@@ -379,7 +378,6 @@ describe("structuredReplay", () => {
         type: "tool_result",
         tool_use_id: "toolu_01a",
         content: [{ type: "text", text: "" }],
-        is_error: false,
       },
     ]);
   });

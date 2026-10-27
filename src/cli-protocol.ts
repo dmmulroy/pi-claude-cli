@@ -398,11 +398,15 @@ export type CliTextOrImageBlock =
 export type CliUserContentBlock =
   | CliTextOrImageBlock
   | {
-      /** The result of an earlier `tool_use`; only in a replayed history. */
-      readonly type: "tool_result";
+      /**
+       * The result of an earlier `tool_use`; only in a replayed history.
+       * Keys in the order, and `is_error` only when true, as the CLI writes
+       * the result of a held call, so a replay sends the same bytes.
+       */
       readonly tool_use_id: string;
+      readonly type: "tool_result";
       readonly content: ReadonlyArray<CliTextOrImageBlock>;
-      readonly is_error: boolean;
+      readonly is_error?: true;
     };
 
 /** One content block of a replayed assistant message. */

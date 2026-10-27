@@ -51,6 +51,8 @@ export interface ClaudeCliLaunch {
   readonly thinking: CliThinking;
   /** The process's stdin; ending the stream closes it. */
   readonly stdin: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
+  /** The turn relay's route, as `ANTHROPIC_BASE_URL`; none talks to the API directly. */
+  readonly baseUrl: Option.Option<string>;
 }
 
 /** Defines the Claude Code CLI launcher. */
@@ -104,6 +106,11 @@ const launchArguments = (
   launch.modelId,
   "--permission-prompt-tool",
   "stdio",
+  // Not auto mode: it puts Claude Code's own working instructions ("## Auto
+  // Mode Active") into pi's conversation. Permission requests still come to
+  // the provider over stdio.
+  "--permission-mode",
+  "default",
   // Only the in-band server carrying pi's tools; the user's personal and
   // project MCP servers stay out.
   "--strict-mcp-config",
@@ -248,7 +255,14 @@ export const makeClaudeCli = Effect.gen(function* () {
           ChildProcess.make(CLAUDE_COMMAND, args, {
             cwd: launch.cwd,
             extendEnv: true,
-            env: launchEnvironment(config.mcpToolTimeoutMillis),
+            env: {
+              ...launchEnvironment(config.mcpToolTimeoutMillis),
+              // The provider's own relay, never an inherited override.
+              ...Option.match(launch.baseUrl, {
+                onNone: () => ({}),
+                onSome: (url) => ({ ANTHROPIC_BASE_URL: url }),
+              }),
+            },
             stdin: launch.stdin,
             // Same process group as pi, so Ctrl-C in `pi -p` reaches the CLI.
             // A CLI in a group of its own survives that Ctrl-C with its model
@@ -278,6 +292,7 @@ export const makeClaudeCli = Effect.gen(function* () {
         model: launch.modelId,
         cliSession: launch.cliSessionId,
         thinking: launch.thinking.kind,
+        relay: Option.isSome(launch.baseUrl),
         flags: args.filter((arg) => arg.startsWith("-")).join(" "),
       });
       return handle;

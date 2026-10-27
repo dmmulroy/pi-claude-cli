@@ -37,6 +37,7 @@ export default defineConfig({
         "src/event-bridge.ts",
         "src/overflow.ts",
         "src/pi-context.ts",
+        "src/relay-rewrite.ts",
         "src/signed-thinking.ts",
         "src/subscription-env.ts",
         "src/thinking-config.ts",

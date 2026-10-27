@@ -180,8 +180,8 @@ export function structuredReplay(
   const answerMissingResults = () => {
     for (const id of unanswered)
       userContent().push({
-        type: "tool_result",
         tool_use_id: id,
+        type: "tool_result",
         content: [{ type: "text", text: MISSING_TOOL_RESULT_TEXT }],
         is_error: true,
       });
@@ -235,10 +235,10 @@ export function structuredReplay(
       const content = textAndImageBlocks(message.content);
       if (unanswered.delete(id)) {
         userContent().push({
-          type: "tool_result",
           tool_use_id: id,
+          type: "tool_result",
           content: content.length > 0 ? content : [{ type: "text", text: "" }],
-          is_error: message.isError,
+          ...(message.isError ? { is_error: true as const } : {}),
         });
       } else {
         // No tool call for it in the turn before (that turn failed, or the

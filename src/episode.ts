@@ -220,6 +220,8 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
         allowHandoff,
         tools,
         traceRawWire: config.traceWireDetail === "raw",
+        relay: config.relay,
+        relayDump: config.relayDump,
       })
       .pipe(
         Effect.tap((launched) => Ref.set(borrowed, Option.some(launched))),

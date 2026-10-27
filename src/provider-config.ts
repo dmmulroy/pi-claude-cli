@@ -9,6 +9,14 @@
 import { Config, Context, Duration, Effect, Layer, Option } from "effect";
 import { ALLOW_USAGE_CREDITS_ENV } from "./usage-credits.ts";
 
+/**
+ * The turn relay between the CLI and the API (`PI_CLAUDE_CLI_RELAY`).
+ * `off`, the default, lets the CLI talk to the API itself; `shadow` routes it
+ * through the relay, which records each request and changes nothing;
+ * `rewrite` also applies the relay's request rewrites (`src/relay-rewrite.ts`).
+ */
+export type RelayMode = "off" | "shadow" | "rewrite";
+
 /** How much of the CLI's stdout is recorded on the `episode` span. */
 export type TraceWireDetail = "counts" | "events" | "raw";
 
@@ -48,6 +56,9 @@ export interface IProviderConfig {
   /** True when inherited simple or safe mode would break the launch. */
   readonly restrictedMode: boolean;
   readonly traceWireDetail: TraceWireDetail;
+  readonly relay: RelayMode;
+  /** `PI_CLAUDE_CLI_RELAY_DUMP`: a directory for relayed request bodies (content!). */
+  readonly relayDump: Option.Option<string>;
   /** How a fresh process is given pi's history (`PI_CLAUDE_CLI_IMPORT`). */
   readonly historyImport: HistoryImport;
   /**
@@ -157,6 +168,13 @@ export const makeProviderConfig = Effect.gen(function* () {
     ),
     restrictedMode: simple || safe,
     traceWireDetail: yield* traceWireDetail,
+    relayDump: yield* envText("PI_CLAUDE_CLI_RELAY_DUMP"),
+    relay: yield* envText("PI_CLAUDE_CLI_RELAY").pipe(
+      Effect.map((text): RelayMode => {
+        const value = Option.getOrElse(text, () => "").toLowerCase();
+        return value === "shadow" || value === "rewrite" ? value : "off";
+      }),
+    ),
     historyImport: yield* historyImport,
     allowUsageCredits: yield* envFlag(ALLOW_USAGE_CREDITS_ENV),
   });
