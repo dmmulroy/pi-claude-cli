@@ -562,6 +562,14 @@ const scenarios: Record<
       );
     }),
 
+  "structured-import-long": (session) =>
+    Effect.gen(function* () {
+      // Twenty finished tool rounds: twenty-one held user messages, each of
+      // which the CLI must confirm before the next is written.
+      for (let round = 0; round < 20; round++) yield* foreignToolExchange(session);
+      yield* expectDone(yield* session.say("and now?"), "PORT-OK");
+    }),
+
   "signed-thinking-replay": (session) =>
     Effect.gen(function* () {
       // The stub's thinking is signed "STUB-SIGNATURE".

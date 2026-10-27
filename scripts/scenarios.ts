@@ -376,6 +376,21 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     },
   ),
   scenario(
+    "structured-import-long",
+    "a long history is imported one held message at a time, as a CLI that confirms queued messages together requires",
+    [
+      [...episode("mode=spawn", "import=structured", "importFrames=81"), ...count(1)],
+      [
+        ...span("ClaudeProcess.importHistory", "acknowledged=true"),
+        ...count(1),
+        "--max-ms",
+        "5000",
+      ],
+      [...span("ClaudeProcess.retire", "cause=import"), "--max-count", "0"],
+    ],
+    { env: { PI_CLAUDE_CLI_IMPORT: "structured", PI_CLAUDE_CLI_KEEPALIVE_MS: "0" } },
+  ),
+  scenario(
     "signed-thinking-replay",
     "a fresh process gets signed thinking back only while pi's message is unchanged",
     [

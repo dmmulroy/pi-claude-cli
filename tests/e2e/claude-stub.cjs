@@ -47,6 +47,8 @@
  *   CLAUDE_STUB_MODELS      JSON for `models` in the `initialize` response
  *   CLAUDE_STUB_FRAMES_FILE append each user and assistant message read from
  *                           stdin, with whether it was held
+ *   Held user messages already queued when the stub gets to them share one
+ *   empty result, as on the real CLI.
  *   CLAUDE_STUB_QUERY_HELD=1  answer a held user message (`shouldQuery:
  *                           false`) with a model turn, as a CLI that does
  *                           not know the field would
@@ -570,20 +572,31 @@ const handleLine = (line) => {
     process.env.CLAUDE_STUB_QUERY_HELD !== "1"
   ) {
     // Held: added to the conversation without a model call, then confirmed
-    // with an empty result, as Claude Code 2.1.292 does.
-    void mcpReady.then(() => {
-      emit({ type: "system", subtype: "init", session_id: "stub-session" });
-      emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        num_turns: 0,
-      });
-    });
+    // with an empty result. Like Claude Code 2.1.299, held messages that are
+    // already queued when it gets to them are confirmed together, with one
+    // result: a burst of five gets two, not five.
+    if (!heldConfirmationPending) {
+      heldConfirmationPending = true;
+      void mcpReady.then(() =>
+        setTimeout(() => {
+          heldConfirmationPending = false;
+          emit({ type: "system", subtype: "init", session_id: "stub-session" });
+          emit({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            num_turns: 0,
+          });
+        }, 5),
+      );
+    }
     return;
   }
   if (msg.type === "user") void mcpReady.then(() => startTurn(userText(msg)));
 };
+
+/** A confirmation is scheduled; held messages until then share it. */
+let heldConfirmationPending = false;
 
 let buf = "";
 process.stdin.on("data", (chunk) => {
