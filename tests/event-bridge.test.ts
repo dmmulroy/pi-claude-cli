@@ -6,6 +6,7 @@ vi.mock("@earendil-works/pi-ai", () => ({
 }));
 
 import { createEventBridge } from "../src/event-bridge";
+import { claudeToolName, createToolNameMap } from "../src/tool-mapping";
 import { calculateCost } from "@earendil-works/pi-ai";
 
 // Helper: create a mock stream that captures pushed events
@@ -1221,7 +1222,27 @@ describe("createEventBridge", () => {
     });
   });
 
-  describe("MCP prefix stripping via mapClaudeToolNameToPi", () => {
+  describe("MCP tool names back to pi's", () => {
+    it("maps an aliased tool name back to pi's name", () => {
+      const bridge = createEventBridge(
+        stream as any,
+        model as any,
+        createToolNameMap(["deploy.prod"]),
+      );
+      bridge.handleEvent({ type: "message_start", message: { usage: {} } });
+      stream.events.length = 0;
+      bridge.handleEvent({
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "toolu_alias01",
+          name: claudeToolName("deploy.prod"),
+        },
+      });
+      expect((stream.events[0] as any).partial.content[0].name).toBe("deploy.prod");
+    });
+
     it("strips mcp__custom-tools__ prefix from tool_use name in toolcall_start", () => {
       const bridge = createBridgeWithStart();
       bridge.handleEvent({

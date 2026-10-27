@@ -32,6 +32,11 @@ export interface IProviderConfig {
   readonly inactivityTimeout: Duration.Duration;
   /** Idle lifetime of a process parked after a turn; none parks nothing. */
   readonly keepalive: Option.Option<Duration.Duration>;
+  /**
+   * Most processes parked at once across pi sessions
+   * (`PI_CLAUDE_CLI_MAX_PARKED`, default 4); each holds hundreds of MB.
+   */
+  readonly maxParked: number;
   /** Idle lifetime of a process parked inside a tool call. */
   readonly handoffWait: Duration.Duration;
   /** False interrupts the turn at each tool call instead of holding it open. */
@@ -66,6 +71,7 @@ const DEFAULT_INACTIVITY_TIMEOUT_MILLIS = 300_000;
  */
 const DEFAULT_KEEPALIVE_MILLIS = 3_600_000;
 const DEFAULT_HANDOFF_WAIT_MILLIS = 1_800_000;
+const DEFAULT_MAX_PARKED = 4;
 /** One hour: tool calls block in the CLI's MCP client while pi runs the tool. */
 const DEFAULT_MCP_TOOL_TIMEOUT_MILLIS = "3600000";
 
@@ -130,6 +136,14 @@ export const makeProviderConfig = Effect.gen(function* () {
       DEFAULT_INACTIVITY_TIMEOUT_MILLIS,
     ),
     keepalive: yield* keepalive,
+    maxParked: yield* envText("PI_CLAUDE_CLI_MAX_PARKED").pipe(
+      Effect.map((text) =>
+        Option.getOrElse(
+          Option.filter(Option.map(text, Number), (n) => Number.isInteger(n) && n > 0),
+          () => DEFAULT_MAX_PARKED,
+        ),
+      ),
+    ),
     handoffWait: yield* millisOrDefault(
       "PI_CLAUDE_CLI_HANDOFF_WAIT_MS",
       DEFAULT_HANDOFF_WAIT_MILLIS,

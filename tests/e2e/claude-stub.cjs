@@ -146,9 +146,29 @@ const askPermission = (toolName, toolUseId, input) =>
     });
   });
 
+/** The tool names the in-band server listed last. */
+let listedToolNames = [];
+
+/** What Claude Code 2.1.299 does to an MCP tool name: other characters become `_`. */
+const cliToolName = (name) => name.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+/**
+ * The listed tool a keyword asks for: the one of that name, or the one the
+ * provider listed under an alias of it (`deploy.prod` -> `deploy_prod_<hash>`).
+ */
+const listedToolFor = (piToolName) => {
+  const stem = cliToolName(piToolName);
+  return (
+    listedToolNames.find((name) => name === piToolName) ??
+    listedToolNames.find((name) => name.startsWith(`${stem}_`)) ??
+    piToolName
+  );
+};
+
 /** Ask the in-band server for its tools, as at start and after a change. */
 const listTools = async () => {
   const listed = await mcp("tools/list");
+  listedToolNames = (listed.response?.result?.tools ?? []).map((tool) => tool.name);
   if (process.env.CLAUDE_STUB_TOOLS_FILE) {
     fs.appendFileSync(
       process.env.CLAUDE_STUB_TOOLS_FILE,
@@ -276,12 +296,15 @@ const endInterruptedTurn = () => {
 /** One assistant message asking for each named pi tool, then their calls. */
 const toolTurn = async (piToolNames) => {
   const input = { path: "stub.txt" };
-  const uses = piToolNames.map((piToolName, index) => ({
-    index,
-    piToolName,
-    toolUseId: `toolu_stub_${process.pid}_${++toolSeq}`,
-    name: `mcp__${sdkServer}__${piToolName}`,
-  }));
+  const uses = piToolNames.map((piToolName, index) => {
+    const mcpName = listedToolFor(piToolName);
+    return {
+      index,
+      mcpName,
+      toolUseId: `toolu_stub_${process.pid}_${++toolSeq}`,
+      name: `mcp__${sdkServer}__${cliToolName(mcpName)}`,
+    };
+  });
   messageStart();
   for (const use of uses) {
     streamEvent({
@@ -317,7 +340,7 @@ const toolTurn = async (piToolNames) => {
   const calls = Promise.all(
     uses.map((use) =>
       mcp("tools/call", {
-        name: use.piToolName,
+        name: use.mcpName,
         arguments: input,
         _meta: { "claudecode/toolUseId": use.toolUseId, progressToken: rpcSeq },
       }),
@@ -344,7 +367,7 @@ const startTurn = (text) => {
     overage: text.includes("overage"),
     mismatch: text.includes("mismatch"),
   };
-  const tool = /tools?:([A-Za-z0-9_,-]+)/.exec(text);
+  const tool = /tools?:([A-Za-z0-9_.,-]+)/.exec(text);
   if (tool) {
     toolTurn(tool[1].split(",")).catch(endInterruptedTurn);
     return;

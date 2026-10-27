@@ -62,7 +62,7 @@ import {
   mcpToolErrorResult,
 } from "./mcp-inband.ts";
 import { type CliThinking, type ThinkingControl, thinkingControls } from "./thinking-config.ts";
-import { isHandoffClaudeTool, mapClaudeToolNameToPi } from "./tool-mapping.ts";
+import { isHandoffClaudeTool, mcpToolNameOfClaudeTool } from "./tool-mapping.ts";
 import type { CliReplayFrame } from "./pi-context.ts";
 import { recordSpanEvent } from "./tracing.ts";
 import { type TokenUsage, ZERO_TOKEN_USAGE } from "./usage.ts";
@@ -93,6 +93,10 @@ export type RetireCause =
   | "unparked"
   /** Another process was parked for the same pi session. */
   | "replaced"
+  /** Its call ran while another call of the same pi session was in flight. */
+  | "concurrent"
+  /** More processes were parked than `PI_CLAUDE_CLI_MAX_PARKED` allows. */
+  | "evicted"
   /** The process ended on its own. */
   | "exited"
   /** A pi lifecycle event or the runtime's disposal. */
@@ -232,7 +236,7 @@ const UNMATCHED_CALL_MESSAGE = "pi could not match this tool call to an assistan
 
 /** One `tool_use` block the model streamed and pi is expected to answer. */
 interface ExpectedToolCall {
-  /** The pi tool the model asked for. */
+  /** The tool the model asked for, by its name on the in-band MCP server. */
   readonly name: string;
   /** pi's result; completed by `answerToolCall` or when the turn ends. */
   readonly result: Deferred.Deferred<McpToolResult>;
@@ -451,7 +455,7 @@ const startClaudeProcess = Effect.fnUntraced(function* (
           isHandoffClaudeTool(block.name)
         ) {
           const call: ExpectedToolCall = {
-            name: mapClaudeToolNameToPi(block.name),
+            name: mcpToolNameOfClaudeTool(block.name),
             result: yield* Deferred.make<McpToolResult>(),
           };
           yield* Ref.update(expected, HashMap.set(block.id, call));
@@ -735,14 +739,17 @@ const startClaudeProcess = Effect.fnUntraced(function* (
     awaitsToolCalls: (toolUseIds) =>
       Effect.gen(function* () {
         if (!(yield* Ref.get(alive)) || !(yield* Ref.get(turnActive))) return false;
-        if (toolUseIds.length === 0) return false;
-        const calls = yield* Ref.get(expected);
-        for (const toolUseId of toolUseIds) {
-          const call = HashMap.get(calls, toolUseId);
-          if (Option.isNone(call)) return false;
-          if (yield* Deferred.isDone(call.value.result)) return false;
+        // Exactly the calls the CLI waits on, each once: a missing result
+        // would leave the CLI blocked on it, a duplicate would answer twice.
+        const supplied = new Set(toolUseIds);
+        if (supplied.size === 0 || supplied.size !== toolUseIds.length) return false;
+        let pending = 0;
+        for (const [toolUseId, call] of yield* Ref.get(expected)) {
+          if (yield* Deferred.isDone(call.result)) continue;
+          if (!supplied.has(toolUseId)) return false;
+          pending += 1;
         }
-        return true;
+        return pending === supplied.size;
       }),
     answerToolCall: (toolUseId, result) =>
       Effect.gen(function* () {

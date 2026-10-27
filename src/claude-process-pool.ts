@@ -5,6 +5,15 @@
  * Every process scope is a child of this service's scope, so disposing the
  * runtime ends every process, parked or borrowed. A parked process is
  * exclusive: `take` removes it, so two calls can never share one.
+ *
+ * Only one call at a time owns a pi session's place in the pool: `take`
+ * hands it a lease, and only the lease's holder may park. A call that runs
+ * while another of the same session is in flight gets no lease, and its
+ * process is retired when it ends instead of replacing the owner's.
+ *
+ * At most `maxParked` processes are parked at once (each holds hundreds of
+ * megabytes); parking one more retires the longest-parked, preferring one
+ * that is not inside a tool call.
  */
 
 import { Clock, Context, Duration, Effect, FiberHandle, HashMap, Layer, Option, Ref } from "effect";
@@ -16,6 +25,21 @@ import {
   type RetireCause,
 } from "./claude-process.ts";
 import type { CliRequirementError, CliSpawnError } from "./errors.ts";
+import { ProviderConfig, providerConfigLayer } from "./provider-config.ts";
+
+/** One call's claim on its pi session's place in the pool. */
+export interface SessionLease {
+  readonly piSessionId: string;
+  readonly token: number;
+}
+
+/** What `take` gives a call. */
+export interface TakenSession {
+  /** The live process parked for the session, if any. */
+  readonly process: Option.Option<IClaudeProcess>;
+  /** None while another call of the session holds the lease. */
+  readonly lease: Option.Option<SessionLease>;
+}
 
 /** Defines the pool of CLI processes. */
 export interface IClaudeProcessPool {
@@ -23,17 +47,24 @@ export interface IClaudeProcessPool {
   readonly launch: (
     launch: ClaudeProcessLaunch,
   ) => Effect.Effect<IClaudeProcess, CliRequirementError | CliSpawnError>;
-  /** Remove and return the live process parked for a pi session, if any. */
-  readonly take: (piSessionId: string) => Effect.Effect<Option.Option<IClaudeProcess>>;
+  /**
+   * Remove and return the live process parked for a pi session, if any, and
+   * the session's lease unless another call holds it. The caller must end
+   * the lease (`park` or `endLease`).
+   */
+  readonly take: (piSessionId: string) => Effect.Effect<TakenSession>;
   /**
    * Keep a process for its pi session's next call, and retire it if nobody
-   * comes back within `idle`. A process already parked there is retired.
+   * comes back within `idle`. Ends the lease. A process already parked there
+   * is retired; so is this one if the lease is no longer the session's.
    */
   readonly park: (
-    piSessionId: string,
+    lease: SessionLease,
     process: IClaudeProcess,
     idle: Duration.Duration,
   ) => Effect.Effect<void>;
+  /** Give up a lease without parking. Idempotent. */
+  readonly endLease: (lease: SessionLease) => Effect.Effect<void>;
   /**
    * Retire a process without waiting for it: retiring can take seconds, and
    * pi must not wait that long for an error or an abort.
@@ -81,8 +112,12 @@ const killOnProcessExit = (livePids: Set<number>) =>
 /** Constructs the pool; its scope is the parent of every process scope. */
 export const makeClaudeProcessPool = Effect.gen(function* () {
   const cli = yield* ClaudeCli;
+  const { maxParked } = yield* ProviderConfig;
   const runtimeScope = yield* Effect.scope;
   const parked = yield* Ref.make(HashMap.empty<string, ParkedProcess>());
+  /** The lease token of each pi session with a call in flight. */
+  const leases = yield* Ref.make(HashMap.empty<string, number>());
+  const leaseSequence = yield* Ref.make(0);
   const livePids = new Set<number>();
   yield* killOnProcessExit(livePids);
 
@@ -97,6 +132,37 @@ export const makeClaudeProcessPool = Effect.gen(function* () {
         : entries,
     );
 
+  /** End the lease if it is still the session's; true when it was. */
+  const endLease = (lease: SessionLease) =>
+    Ref.modify(leases, (entries) =>
+      Option.exists(HashMap.get(entries, lease.piSessionId), (token) => token === lease.token)
+        ? [true, HashMap.remove(entries, lease.piSessionId)]
+        : [false, entries],
+    );
+
+  /** Retire the longest-parked process while more than `maxParked` are parked. */
+  const evictOverCap = (keep: string) =>
+    Effect.gen(function* () {
+      while (HashMap.size(yield* Ref.get(parked)) > maxParked) {
+        const candidates = [];
+        for (const [piSessionId, entry] of yield* Ref.get(parked)) {
+          if (piSessionId === keep) continue;
+          candidates.push({ piSessionId, entry, inToolCall: yield* entry.process.isTurnActive });
+        }
+        candidates.sort(
+          (a, b) =>
+            Number(a.inToolCall) - Number(b.inToolCall) ||
+            a.entry.parkedAtMillis - b.entry.parkedAtMillis,
+        );
+        const victim = candidates[0];
+        if (victim === undefined) return;
+        yield* forget(victim.piSessionId, victim.entry.process);
+        yield* FiberHandle.clear(victim.entry.process.idleTimer);
+        yield* Effect.annotateCurrentSpan({ evictedPid: victim.entry.process.pid });
+        yield* retireInBackground(victim.entry.process, "evicted");
+      }
+    });
+
   return ClaudeProcessPool.of({
     launch: (launch) =>
       Effect.gen(function* () {
@@ -110,13 +176,26 @@ export const makeClaudeProcessPool = Effect.gen(function* () {
       }).pipe(Effect.provideService(ClaudeCli, cli)),
 
     take: Effect.fn("ClaudeProcessPool.take")(function* (piSessionId: string) {
-      const entry = yield* Ref.modify(parked, (entries) => [
-        HashMap.get(entries, piSessionId),
-        HashMap.remove(entries, piSessionId),
-      ]);
+      const token = yield* Ref.updateAndGet(leaseSequence, (n) => n + 1);
+      const leased = yield* Ref.modify(leases, (entries) =>
+        HashMap.has(entries, piSessionId)
+          ? [false, entries]
+          : [true, HashMap.set(entries, piSessionId, token)],
+      );
+      const lease = leased
+        ? Option.some<SessionLease>({ piSessionId, token })
+        : Option.none<SessionLease>();
+      yield* Effect.annotateCurrentSpan({ leased });
+      // A call without the lease leaves the owner's process alone.
+      const entry = leased
+        ? yield* Ref.modify(parked, (entries) => [
+            HashMap.get(entries, piSessionId),
+            HashMap.remove(entries, piSessionId),
+          ])
+        : Option.none<ParkedProcess>();
       if (Option.isNone(entry)) {
         yield* Effect.annotateCurrentSpan({ hit: false });
-        return Option.none<IClaudeProcess>();
+        return { process: Option.none(), lease } satisfies TakenSession;
       }
       const { process, parkedAtMillis } = entry.value;
       yield* FiberHandle.clear(process.idleTimer);
@@ -126,18 +205,28 @@ export const makeClaudeProcessPool = Effect.gen(function* () {
         pid: process.pid,
         idleMs: (yield* Clock.currentTimeMillis) - parkedAtMillis,
       });
-      return alive ? Option.some(process) : Option.none<IClaudeProcess>();
+      return {
+        process: alive ? Option.some(process) : Option.none(),
+        lease,
+      } satisfies TakenSession;
     }),
 
     park: Effect.fn("ClaudeProcessPool.park")(function* (
-      piSessionId: string,
+      lease: SessionLease,
       process: IClaudeProcess,
       idle: Duration.Duration,
     ) {
+      const { piSessionId } = lease;
       yield* Effect.annotateCurrentSpan({
         pid: process.pid,
         idleMs: Duration.toMillis(idle),
       });
+      // A lease already ended is no claim on the session: never displace
+      // whoever holds it now.
+      if (!(yield* endLease(lease))) {
+        yield* Effect.annotateCurrentSpan({ leased: false });
+        return yield* retireInBackground(process, "concurrent");
+      }
       const parkedAtMillis = yield* Clock.currentTimeMillis;
       const previous = yield* Ref.modify(parked, (entries) => [
         HashMap.get(entries, piSessionId),
@@ -152,7 +241,10 @@ export const makeClaudeProcessPool = Effect.gen(function* () {
         Effect.andThen(retireInBackground(process, "idle")),
         FiberHandle.run(process.idleTimer),
       );
+      yield* evictOverCap(piSessionId);
     }),
+
+    endLease: (lease) => Effect.asVoid(endLease(lease)),
 
     retireInBackground,
 
@@ -190,5 +282,5 @@ export const claudeProcessPoolLayerWithoutDependencies = Layer.effect(
 
 /** Provides the pool over the real Claude CLI. */
 export const claudeProcessPoolLayer = claudeProcessPoolLayerWithoutDependencies.pipe(
-  Layer.provide(claudeCliLayer),
+  Layer.provide([claudeCliLayer, providerConfigLayer]),
 );

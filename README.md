@@ -101,6 +101,10 @@ A fresh process pays for the whole history again: there is no prompt cache acros
 
 By default the history goes in **structured**: the messages themselves, with real `tool_use` / `tool_result` blocks, as pi's own Anthropic provider would send them. Claude's signed thinking is replayed with its signatures while the message is unchanged and from the same model; otherwise as plain text. Tool call ids Claude would reject (from another provider) are mapped to valid ones on the wire; pi's stored ids never change.
 
+A pi tool name the CLI would rewrite (the CLI turns anything outside `[a-zA-Z0-9_-]` into `_`) or that would not fit Claude's 64-character limit with the MCP prefix reaches the model under a stable alias such as `deploy_prod_1a2b3c4d`, and pi gets its calls under its own name.
+
+Only one call at a time owns a pi session's parked process. A call that overlaps another of the same session (a background summary, say) runs on a process of its own, retired when it ends.
+
 This relies on undocumented CLI stdin behaviour, checked against the real API on 2.1.299. On a CLI older than 2.1.292, or if the CLI does not confirm the import, the provider falls back to a **flat** import: one role-labelled text message, no thinking. `PI_CLAUDE_CLI_IMPORT=flat` always uses it.
 
 Details: [docs/CONTEXT-POLICY.md](docs/CONTEXT-POLICY.md).
@@ -133,6 +137,7 @@ All optional. A value that does not parse falls back to its default.
 | ----------------------------------- | ------------ | ------------------------------------------------------------------------------ |
 | `PI_CLAUDE_CLI_KEEPALIVE_MS`        | `3600000`    | Idle lifetime of a parked process; `0` parks nothing                           |
 | `PI_CLAUDE_CLI_TIMEOUT_MS`          | `300000`     | Longest stdout silence while a call is attached; then an error and a kill      |
+| `PI_CLAUDE_CLI_MAX_PARKED`          | `4`          | Most processes parked at once; parking one more retires the longest-parked     |
 | `PI_CLAUDE_CLI_HANDOFF_WAIT_MS`     | `1800000`    | Maximum wait for pi to answer a tool call                                      |
 | `PI_CLAUDE_CLI_HANDOFF_PROXY`       | on           | `0` interrupts the turn at each tool call instead of holding it open           |
 | `PI_CLAUDE_CLI_IMPORT`              | `structured` | `flat` gives a fresh process the history as one text message                   |

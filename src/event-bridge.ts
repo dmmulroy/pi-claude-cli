@@ -24,7 +24,7 @@ import {
   type SignedThinking,
   writeSignedThinking,
 } from "./signed-thinking.ts";
-import { mapClaudeToolNameToPi, isHandoffClaudeTool } from "./tool-mapping.ts";
+import { createToolNameMap, isHandoffClaudeTool, type ToolNameMap } from "./tool-mapping.ts";
 
 /** The four token counters, accumulated across the cycles of an episode. */
 interface UsageCounters {
@@ -207,6 +207,8 @@ function rateLimitDetails(info: ClaudeRateLimitInfo): JsonObject {
 export function createEventBridge(
   stream: AssistantMessageEventStream,
   model: Model<Api>,
+  /** pi's tools for the request: maps aliased names back to pi's. */
+  toolNames: ToolNameMap = createToolNameMap([]),
 ): EventBridge {
   // Tracked content blocks indexed by Claude's content_block index
   const blocks: TrackedBlock[] = [];
@@ -520,7 +522,7 @@ export function createEventBridge(
         return;
       }
 
-      const piName = mapClaudeToolNameToPi(claudeName);
+      const piName = toolNames(claudeName);
       const id = event.content_block!.id!;
 
       const block: TrackedToolBlock = {
@@ -846,7 +848,7 @@ export function createEventBridge(
       if (
         actual?.type !== "tool_use" ||
         actual.id !== expected.id ||
-        actual.name !== mapClaudeToolNameToPi(expected.name ?? "")
+        actual.name !== toolNames(expected.name ?? "")
       )
         return differs;
       const content = output.content[actual.contentIndex];

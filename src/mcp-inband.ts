@@ -19,6 +19,7 @@ import {
   type McpResponse,
   type McpToolCall,
 } from "./cli-protocol.ts";
+import { mcpToolName } from "./tool-mapping.ts";
 
 /** Name of the in-band server; the CLI prefixes tool names with it. */
 export const INBAND_MCP_SERVER_NAME = "custom-tools";
@@ -43,13 +44,19 @@ export interface McpToolDefinition {
   readonly inputSchema: Tool["parameters"];
 }
 
-/** pi's tools for the request, with argument schemas unchanged. */
+/**
+ * pi's tools for the request, with argument schemas unchanged, under names
+ * the CLI and the API take as they are. A second tool of the same name is
+ * left out: the model could not tell them apart.
+ */
 export const mcpToolDefinitions = (tools: ReadonlyArray<Tool>): ReadonlyArray<McpToolDefinition> =>
-  tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    inputSchema: tool.parameters,
-  }));
+  tools
+    .filter((tool, index) => tools.findIndex((other) => other.name === tool.name) === index)
+    .map((tool) => ({
+      name: mcpToolName(tool.name),
+      description: tool.description,
+      inputSchema: tool.parameters,
+    }));
 
 /** The MCP tool result the CLI hands to the model. */
 export interface McpToolResult {

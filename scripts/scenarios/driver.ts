@@ -20,7 +20,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
-import { Config, Console, Data, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
+import { Config, Console, Data, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema } from "effect";
 import { Type } from "typebox";
 import type { EpisodeOptions } from "../../src/episode.ts";
 import { nodeFileSystemLayer } from "../../src/node-platform.ts";
@@ -342,6 +342,52 @@ const scenarios: Record<
       // Each result must reach the call that asked for it.
       yield* session.answerToolCalls((toolName) => `${toolName}-RESULT`);
       yield* expectDone(yield* session.call(), "TOOL-DONE read-RESULT|bash-RESULT");
+    }),
+
+  "tool-handoff-partial": (session) =>
+    Effect.gen(function* () {
+      yield* expectToolCalls(yield* session.say("please tools:read,bash"), ["read", "bash"]);
+      yield* session.answerToolCalls((toolName) => `${toolName}-RESULT`);
+      // Only one of the two results comes back: the CLI must not be left
+      // waiting on the other.
+      yield* session.update((current) => ({
+        ...current,
+        messages: current.messages.slice(0, -1),
+      }));
+      const answer = yield* session.call();
+      yield* expect(
+        answer.stopReason !== "error" && answer.stopReason !== "aborted",
+        `expected an answer, got ${answer.stopReason}: ${answer.errorMessage ?? ""}`,
+      );
+    }),
+
+  "tool-name-alias": (session) =>
+    Effect.gen(function* () {
+      yield* session.update((current) => ({ ...current, tools: [tool("deploy.prod")] }));
+      yield* expectToolCalls(yield* session.say("please tool:deploy.prod"), ["deploy.prod"]);
+      yield* session.answerToolCalls("DEPLOYED");
+      yield* expectDone(yield* session.call(), "TOOL-DONE DEPLOYED");
+    }),
+
+  "concurrent-session": (session) =>
+    Effect.gen(function* () {
+      yield* expectDone(yield* session.say("hello"), "PORT-OK");
+      yield* session.user("chatter");
+      // A second call of the same session while the first is in flight.
+      const first = yield* Effect.forkChild(session.call());
+      yield* Effect.sleep("150 millis");
+      yield* expectDone(yield* session.call(), "PORT-OK");
+      yield* expectDone(yield* Fiber.join(first), "PORT-OK");
+      // The owner's process is still the session's.
+      yield* expectDone(yield* session.say("again"), "PORT-OK");
+    }),
+
+  "parked-cap": (session) =>
+    Effect.gen(function* () {
+      yield* expectDone(yield* session.say("hello"), "PORT-OK");
+      yield* expectDone(yield* session.say("hello", { sessionId: "scenario-other" }), "PORT-OK");
+      // Parking the other session's process evicted this one's.
+      yield* expectDone(yield* session.say("again"), "PORT-OK");
     }),
 
   "tool-abandoned": (session) =>

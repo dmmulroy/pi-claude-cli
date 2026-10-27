@@ -13,7 +13,7 @@ import type {
   CliUserContentBlock,
 } from "./cli-protocol.ts";
 import { replayableSignedThinking } from "./signed-thinking.ts";
-import { CUSTOM_TOOLS_MCP_PREFIX } from "./tool-mapping.ts";
+import { claudeToolName } from "./tool-mapping.ts";
 import { createToolCallIdMap, toolCallIdsOf } from "./tool-call-id.ts";
 
 /** pi's request with its current prompt and tools resolved. */
@@ -216,7 +216,7 @@ export function structuredReplay(
           content.push({
             type: "tool_use",
             id: ids.toClaude(block.id),
-            name: `${CUSTOM_TOOLS_MCP_PREFIX}${block.name}`,
+            name: claudeToolName(block.name),
             // Arguments that did not arrive as an object were already
             // refused by pi; the API takes nothing but an object.
             input: isArgumentRecord(block.arguments) ? block.arguments : {},

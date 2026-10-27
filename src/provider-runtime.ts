@@ -18,9 +18,11 @@ import { ClaudeProcessPool, claudeProcessPoolLayer } from "./claude-process-pool
 import { type EpisodeEnd, type EpisodeInput, type EpisodeOptions, runEpisode } from "./episode.ts";
 import { createEventBridge, type EventBridge } from "./event-bridge.ts";
 import { nodeCryptoLayer } from "./node-platform.ts";
+import { piContext } from "./pi-context.ts";
 import { ProviderConfig, providerConfigLayer } from "./provider-config.ts";
 import { RuntimeDirectory, runtimeDirectoryLayer } from "./runtime-directory.ts";
 import { endStreamWithDone, endStreamWithError } from "./terminal-event.ts";
+import { createToolNameMap } from "./tool-mapping.ts";
 import { tracingLayer } from "./tracing.ts";
 import { describeUsageCreditsRejection } from "./usage-credits.ts";
 
@@ -132,7 +134,11 @@ export const startProviderRuntime = <E>(
     });
   return {
     startEpisode: (piStream, model, context, options) => {
-      const bridge = createEventBridge(piStream, model);
+      const bridge = createEventBridge(
+        piStream,
+        model,
+        createToolNameMap(piContext(context).tools.map((tool) => tool.name)),
+      );
       runtime.runCallback(
         runEpisode({
           model,

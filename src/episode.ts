@@ -27,7 +27,7 @@ import type {
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { Cause, Clock, Crypto, Duration, Effect, Exit, Option, Queue, Ref } from "effect";
-import { ClaudeProcessPool } from "./claude-process-pool.ts";
+import { ClaudeProcessPool, type SessionLease } from "./claude-process-pool.ts";
 import type { IClaudeProcess, ReportedRateLimit, RetireCause } from "./claude-process.ts";
 import { cliMessageLabel, type ClaudeResultMessage } from "./cli-protocol.ts";
 import {
@@ -172,6 +172,8 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
 
   /** The process this episode holds and has not yet parked or retired. */
   const borrowed = yield* Ref.make(Option.none<IClaudeProcess>());
+  /** This call's claim on its pi session's place in the pool; none parks nothing. */
+  let lease = Option.none<SessionLease>();
 
   /**
    * Keep the subscription's limit status on pi's message, and end the
@@ -228,9 +230,20 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
   const acquireProcess = Effect.gen(function* () {
     // Taking and recording are one step: an abort between them would leave
     // a process that is neither parked nor known to this episode.
+    // The lease ends with the episode's scope unless `park` ends it first.
     const parked = Option.isSome(piSessionId)
       ? yield* pool.take(piSessionId.value).pipe(
-          Effect.tap((taken) => Ref.set(borrowed, taken)),
+          Effect.tap((taken) =>
+            Effect.gen(function* () {
+              yield* Ref.set(borrowed, taken.process);
+              lease = taken.lease;
+              if (Option.isSome(taken.lease)) {
+                const held = taken.lease.value;
+                yield* Effect.addFinalizer(() => pool.endLease(held));
+              }
+            }),
+          ),
+          Effect.map((taken) => taken.process),
           Effect.uninterruptible,
         )
       : Option.none<IClaudeProcess>();
@@ -472,22 +485,25 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
     });
     yield* Ref.set(borrowed, Option.none());
 
-    if (end._tag === "HandedOff" && Option.isSome(piSessionId)) {
+    // Another call of this session is in flight and owns its place.
+    if (Option.isSome(piSessionId) && Option.isNone(lease))
+      return yield* pool.retireInBackground(process, "concurrent");
+    if (end._tag === "HandedOff" && Option.isSome(lease)) {
       yield* Ref.set(
         process.turnReported,
         addTokenUsage(turnReportedBefore, tokenUsageFromPiUsage(output.usage)),
       );
       yield* Ref.set(process.acknowledged, checkpoint);
-      return yield* pool.park(piSessionId.value, process, config.handoffWait);
+      return yield* pool.park(lease.value, process, config.handoffWait);
     }
     yield* Ref.set(process.turnReported, ZERO_TOKEN_USAGE);
     // An interrupted turn ends on a rejected tool that only pi's history
     // can continue.
     if (end._tag === "TurnEnded" && end.interrupted)
       return yield* pool.retireInBackground(process, "interrupted");
-    if (Option.isSome(piSessionId) && Option.isSome(config.keepalive)) {
+    if (Option.isSome(lease) && Option.isSome(config.keepalive)) {
       yield* Ref.set(process.acknowledged, checkpoint);
-      return yield* pool.park(piSessionId.value, process, config.keepalive.value);
+      return yield* pool.park(lease.value, process, config.keepalive.value);
     }
     return yield* pool.retireInBackground(process, "unparked");
   });

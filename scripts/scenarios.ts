@@ -156,6 +156,47 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     ],
   ),
   scenario(
+    "tool-handoff-partial",
+    "results for only some of the open tool calls retire the blocked process instead of answering it",
+    [
+      [...episode("mode=spawn", "spawnReason=handoffMismatch"), ...count(1)],
+      [...episode("mode=handoff"), "--max-count", "0"],
+      [...span("ClaudeProcess.retire", "cause=history"), ...count(1)],
+      [...span("ClaudeCli.spawn"), ...count(2)],
+    ],
+  ),
+  scenario(
+    "tool-name-alias",
+    "a pi tool name the CLI would rewrite reaches the model as an alias and pi under its own name",
+    [
+      [...episode(), ...count(2), "--same", "pid"],
+      [...episode("mode=handoff", "outcome=done"), ...count(1)],
+      [...span("toolCall", "outcome=ok"), ...count(1)],
+    ],
+  ),
+  scenario(
+    "concurrent-session",
+    "a call that overlaps another of the same session gets its own process, retired when it ends",
+    [
+      [...span("ClaudeProcessPool.take", "leased=false"), ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=concurrent"), ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=replaced"), "--max-count", "0"],
+      [...episode("mode=turn"), ...count(2), "--same", "pid"],
+      [...span("ClaudeCli.spawn"), ...count(2)],
+    ],
+  ),
+  scenario(
+    "parked-cap",
+    "parking past PI_CLAUDE_CLI_MAX_PARKED retires the longest-parked process",
+    [
+      // Each session's parking evicts the other's process.
+      [...span("ClaudeProcess.retire", "cause=evicted"), ...count(2)],
+      [...episode("spawnReason=noParked"), ...count(3)],
+      [...span("ClaudeCli.spawn"), ...count(3)],
+    ],
+    { env: { PI_CLAUDE_CLI_MAX_PARKED: "1" } },
+  ),
+  scenario(
     "tool-abandoned",
     "a new user message instead of the tool result retires the blocked process",
     [
