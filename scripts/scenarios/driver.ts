@@ -871,6 +871,17 @@ const scenarios: Record<
       yield* expectDone(yield* session.say("Answer with the single word OK."), "OK");
     }),
 
+  "cli-command": (session) =>
+    Effect.gen(function* () {
+      yield* expectDone(yield* session.say("hello"), "PORT-OK");
+      const seen = yield* readStubFile("env.json");
+      yield* expect(
+        seen.includes('"command":"claude-alt"') &&
+          seen.includes('"configDir":"/tmp/pi-claude-scenario-config"'),
+        `expected claude-alt with the configured CLAUDE_CONFIG_DIR, got ${seen}`,
+      );
+    }),
+
   "env-stripping": (session) =>
     Effect.gen(function* () {
       yield* session.say("hello");
@@ -896,7 +907,9 @@ const scenarios: Record<
       yield* expect(
         seen.includes('"providerSwitches":[]') &&
           seen.includes('"extraBody":null') &&
-          seen.includes('"totalTokensReminder":"off"'),
+          seen.includes('"totalTokensReminder":"off"') &&
+          seen.includes('"disableTelemetry":"1"') &&
+          seen.includes('"disableErrorReporting":"1"'),
         `expected no provider switches, no extra body and no token reminder, got ${seen}`,
       );
     }),

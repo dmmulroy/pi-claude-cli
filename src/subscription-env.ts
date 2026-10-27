@@ -33,3 +33,39 @@ export function withoutSubscriptionOverrides(
   for (const name of SUBSCRIPTION_OVERRIDE_ENV_VARS) delete kept[name];
   return kept;
 }
+
+/**
+ * The Claude Code executable: `PI_CLAUDE_CLI_COMMAND` (a path or a name on
+ * `PATH`), or `claude`. Every launch, probe and auth check uses it.
+ */
+export function claudeCommand(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+  const command = env.PI_CLAUDE_CLI_COMMAND?.trim();
+  return command !== undefined && command.length > 0 ? command : "claude";
+}
+
+/**
+ * The CLI's configuration directory for every launch, probe and auth check:
+ * `PI_CLAUDE_CLI_CONFIG_DIR` as `CLAUDE_CONFIG_DIR`, or nothing, which leaves
+ * an inherited `CLAUDE_CONFIG_DIR` (or the CLI's default) in place.
+ */
+export function claudeConfigEnvironment(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Record<string, string> {
+  const directory = env.PI_CLAUDE_CLI_CONFIG_DIR?.trim();
+  return directory !== undefined && directory.length > 0 ? { CLAUDE_CONFIG_DIR: directory } : {};
+}
+
+/**
+ * A short name for the installation the provider talks to, or none for the
+ * default one: different installations keep their login state apart.
+ */
+export function claudeInstallationKey(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | undefined {
+  const command = claudeCommand(env);
+  const directory = claudeConfigEnvironment(env).CLAUDE_CONFIG_DIR;
+  if (command === "claude" && directory === undefined) return undefined;
+  return `${command}\u0000${directory ?? ""}`;
+}

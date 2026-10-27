@@ -14,7 +14,11 @@
 import { type Cause, Duration, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import type { CliAccountModel } from "./account-models.ts";
-import { SUBSCRIPTION_OVERRIDE_ENV_VARS } from "./subscription-env.ts";
+import {
+  claudeCommand,
+  claudeConfigEnvironment,
+  SUBSCRIPTION_OVERRIDE_ENV_VARS,
+} from "./subscription-env.ts";
 import { parseCliVersion } from "./cli-requirements.ts";
 import { nodeChildProcessSpawnerLayer } from "./node-platform.ts";
 import { tracingLayer } from "./tracing.ts";
@@ -57,6 +61,7 @@ export const probeEnvironment = (): Record<string, string | undefined> => ({
   ENABLE_CLAUDEAI_MCP_SERVERS: "false",
   DISABLE_AUTOUPDATER: "1",
   ...Object.fromEntries(SUBSCRIPTION_OVERRIDE_ENV_VARS.map((name) => [name, undefined])),
+  ...claudeConfigEnvironment(),
 });
 
 const InitializeResponse = Schema.fromJsonString(
@@ -119,7 +124,7 @@ export const requestAccountModels = Effect.fn("ModelProbe.requestAccountModels",
     const outbound = yield* Queue.unbounded<string, Cause.Done>();
     const answer = Effect.gen(function* () {
       const handle = yield* spawner.spawn(
-        ChildProcess.make("claude", PROBE_ARGUMENTS, {
+        ChildProcess.make(claudeCommand(), PROBE_ARGUMENTS, {
           extendEnv: true,
           env: probeEnvironment(),
           stdin: Stream.fromQueue(outbound).pipe(Stream.encodeText),
@@ -165,7 +170,9 @@ export const requestCliVersion = Effect.fn("ModelProbe.requestCliVersion", {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const version = yield* spawner
     .string(
-      ChildProcess.make("claude", ["--version"], {
+      ChildProcess.make(claudeCommand(), ["--version"], {
+        extendEnv: true,
+        env: claudeConfigEnvironment(),
         stdin: "ignore",
         detached: false,
         killSignal: "SIGKILL",

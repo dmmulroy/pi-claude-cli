@@ -559,6 +559,17 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     [[...episode(), "--max-count", "0"]],
   ),
   scenario(
+    "cli-command",
+    "PI_CLAUDE_CLI_COMMAND picks the executable and PI_CLAUDE_CLI_CONFIG_DIR its configuration",
+    [[...episode("outcome=done"), ...count(1)]],
+    {
+      env: {
+        PI_CLAUDE_CLI_COMMAND: "claude-alt",
+        PI_CLAUDE_CLI_CONFIG_DIR: "/tmp/pi-claude-scenario-config",
+      },
+    },
+  ),
+  scenario(
     "env-stripping",
     "the CLI never sees the variables that would move it off the subscription, and never retries or compacts on its own",
     [[...episode("outcome=done"), ...count(1)]],
@@ -884,6 +895,12 @@ const scenariosCommand = Command.make(
       path.join(stubDirectory, "claude"),
     );
     yield* fs.chmod(path.join(stubDirectory, "claude"), 0o755);
+    // The same stub under another name, for PI_CLAUDE_CLI_COMMAND.
+    yield* fs.copyFile(
+      path.join(repoRoot, "tests", "e2e", "claude-stub.cjs"),
+      path.join(stubDirectory, "claude-alt"),
+    );
+    yield* fs.chmod(path.join(stubDirectory, "claude-alt"), 0o755);
 
     const runs = yield* Effect.forEach(
       selected,

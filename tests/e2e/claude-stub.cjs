@@ -93,6 +93,10 @@ if (process.env.CLAUDE_STUB_ENV_FILE) {
       ),
       extraBody: process.env.CLAUDE_CODE_EXTRA_BODY ?? null,
       totalTokensReminder: process.env.CLAUDE_CODE_TOTAL_TOKENS_REMINDER ?? null,
+      disableTelemetry: process.env.DISABLE_TELEMETRY ?? null,
+      disableErrorReporting: process.env.DISABLE_ERROR_REPORTING ?? null,
+      configDir: process.env.CLAUDE_CONFIG_DIR ?? null,
+      command: require("node:path").basename(process.argv[1] ?? ""),
     }),
   );
 }

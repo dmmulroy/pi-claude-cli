@@ -16,11 +16,17 @@
  */
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AuthCheck } from "@earendil-works/pi-ai";
-import { withoutSubscriptionOverrides } from "./subscription-env.ts";
+import {
+  claudeCommand,
+  claudeConfigEnvironment,
+  claudeInstallationKey,
+  withoutSubscriptionOverrides,
+} from "./subscription-env.ts";
 
 /** What `claude auth status` says about the CLI's login. */
 export interface CliAuthStatus {
@@ -75,10 +81,10 @@ export function parseCliAuthStatus(stdout: string): CliAuthStatus {
 export function probeCliAuthStatus(signal?: AbortSignal): Promise<CliAuthStatus> {
   return new Promise((resolve, reject) => {
     execFile(
-      "claude",
+      claudeCommand(),
       ["auth", "status"],
       {
-        env: withoutSubscriptionOverrides(process.env),
+        env: { ...withoutSubscriptionOverrides(process.env), ...claudeConfigEnvironment() },
         timeout: AUTH_STATUS_TIMEOUT_MILLIS,
         killSignal: "SIGKILL",
         ...(signal === undefined ? {} : { signal }),
@@ -103,10 +109,16 @@ export function defaultCliAuthStatusFile(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): string {
   const state = env.XDG_STATE_HOME?.trim();
+  // Another installation (PI_CLAUDE_CLI_COMMAND / _CONFIG_DIR) keeps its own.
+  const installation = claudeInstallationKey(env);
+  const name =
+    installation === undefined
+      ? "auth-status.json"
+      : `auth-status-${createHash("sha256").update(installation).digest("hex").slice(0, 12)}.json`;
   return join(
     state !== undefined && state.length > 0 ? state : join(homedir(), ".local", "state"),
     "pi-claude-cli",
-    "auth-status.json",
+    name,
   );
 }
 
