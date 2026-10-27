@@ -114,7 +114,7 @@ on(park)
 
 A call that overlaps another in the same session runs on a process of its own, which is retired when it ends.
 
-## The turn relay (experimental)
+## The turn relay
 
 `PI_CLAUDE_CLI_RELAY` puts a small loopback HTTP relay between each CLI process and the API. The CLI keeps its own login: the relay forwards its authorization header to `https://api.anthropic.com`, nowhere else, and never stores or traces it.
 
@@ -127,11 +127,11 @@ flowchart LR
     relay -. "TurnRelay.request span<br/>usage · timings · layout hashes" .-> trace[(trace)]
 ```
 
-| Mode      | Does                                                                                                                             |
-| --------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `off`     | the default; the CLI talks to the API itself                                                                                     |
-| `shadow`  | records every request: status, timings, usage, and one hash per message and system block                                         |
-| `rewrite` | also moves Claude Code's session context back to message 0, and keeps pi's later system messages where they occurred (see below) |
+| Mode      | Does                                                                                                                                                       |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `off`     | the CLI talks to the API itself                                                                                                                            |
+| `shadow`  | records every request: status, timings, usage, and one hash per message and system block                                                                   |
+| `rewrite` | the default: records, and also moves Claude Code's session context back to message 0, and keeps pi's later system messages where they occurred (see below) |
 
 **Why `rewrite`.** Claude Code attaches two reminders, your session context and today's date, to the first message it sends the model. On a first turn that is message 0. In a process that imported a history it is the _last_ message, so every fresh process diverges from the previous request and misses the prompt cache. `rewrite` puts them back where a first turn has them, byte for byte, and sends anything it doesn't recognise as it came.
 
@@ -144,7 +144,7 @@ system-message   first turn  m0 [context, prompt]  m1 system "env … date"
 models           import      m0 [prompt]  m1 system "env" … last [context, …]  system "date"
 ```
 
-**pi's system messages.** pi can add a system message mid-conversation (a prompt section changed, an instruction for what follows). On a model that takes system messages mid-conversation (Opus 4.8, the 5-series), with `rewrite`, the relay sends each one where it occurred, before the assistant message that followed it, as pi's own Anthropic provider does. The process launches with the leading prompt, so an update needs no fresh process and keeps the cache. On other models, or without `rewrite`, every system message is folded into the current prompt, and a changed prompt starts a fresh process.
+**pi's system messages.** pi can add a system message mid-conversation (a prompt section changed, an instruction for what follows). On a model that takes system messages mid-conversation (Opus 4.8, the 5-series), with `rewrite`, the relay sends each one where it occurred, before the assistant message that followed it, as pi's own Anthropic provider does. The process launches with the leading prompt, so an update needs no fresh process and keeps the cache. On other models, or with the relay off or in `shadow`, every system message is folded into the current prompt, and a changed prompt starts a fresh process.
 
 ```text
 on(request)
@@ -159,7 +159,7 @@ on(request)
 | fresh process, `shadow`  | 0%                                        |
 | fresh process, `rewrite` | 96–99% (Haiku 4.5, Sonnet 4.6, Haiku 5.5) |
 
-A fresh process still pays for its launch and import, about 0.7 s at 50 tool rounds and 1.1 s at 200, so warm processes stay the default path and `rewrite` makes the fresh ones (edits, compaction, restarts, evictions) cheap.
+A fresh process still pays for its launch and import, about 0.7 s at 50 tool rounds and 1.1 s at 200, so warm processes stay the main path and the relay makes the fresh ones (edits, compaction, restarts, evictions) cheap.
 
 ## Usage-credit guard
 
@@ -189,7 +189,7 @@ All optional. A value that doesn't parse falls back to its default.
 | `PI_CLAUDE_CLI_HANDOFF_WAIT_MS`     | `1800000`    | longest wait for pi to answer a tool call                                                                                        |
 | `PI_CLAUDE_CLI_HANDOFF_PROXY`       | on           | `0` ends the turn at each tool call instead of holding it open                                                                   |
 | `PI_CLAUDE_CLI_IMPORT`              | `structured` | `flat` imports history as one text message                                                                                       |
-| `PI_CLAUDE_CLI_RELAY`               | `off`        | `shadow` or `rewrite`; see [the turn relay](#the-turn-relay-experimental)                                                        |
+| `PI_CLAUDE_CLI_RELAY`               | `rewrite`    | `shadow` or `off`; see [the turn relay](#the-turn-relay)                                                                         |
 | `PI_CLAUDE_CLI_RELAY_DUMP`          | unset        | directory for relayed request bodies, as sent (`.json`) and as the CLI wrote them (`.cli`); conversation content, debugging only |
 | `PI_CLAUDE_CLI_COMMAND`             | `claude`     | the Claude Code executable: a path, or a name on `PATH`                                                                          |
 | `PI_CLAUDE_CLI_CONFIG_DIR`          | unset        | Claude Code's config directory, passed as `CLAUDE_CONFIG_DIR`                                                                    |

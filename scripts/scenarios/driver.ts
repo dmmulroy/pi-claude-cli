@@ -887,8 +887,8 @@ const scenarios: Record<
       yield* session.say("hello");
       const seen = yield* readStubFile("env.json");
       yield* expect(
-        seen.includes('"anthropic":[]'),
-        `expected no ANTHROPIC_* variables in the CLI's environment, got ${seen}`,
+        seen.includes('"anthropic":[]') && seen.includes('"relayBaseUrl":true'),
+        `expected no inherited ANTHROPIC_* variables, only the relay's loopback base URL, got ${seen}`,
       );
       yield* expect(
         seen.includes('"mcpToolTimeout":"3600000"') &&

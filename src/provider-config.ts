@@ -11,9 +11,10 @@ import { ALLOW_USAGE_CREDITS_ENV } from "./usage-credits.ts";
 
 /**
  * The turn relay between the CLI and the API (`PI_CLAUDE_CLI_RELAY`).
- * `off`, the default, lets the CLI talk to the API itself; `shadow` routes it
- * through the relay, which records each request and changes nothing;
- * `rewrite` also applies the relay's request rewrites (`src/relay-rewrite.ts`).
+ * `rewrite`, the default, routes the CLI through the relay and applies its
+ * request rewrites (`src/relay-rewrite.ts`); `shadow` routes it through the
+ * relay, which records each request and changes nothing; `off` lets the CLI
+ * talk to the API itself.
  */
 export type RelayMode = "off" | "shadow" | "rewrite";
 
@@ -171,8 +172,12 @@ export const makeProviderConfig = Effect.gen(function* () {
     relayDump: yield* envText("PI_CLAUDE_CLI_RELAY_DUMP"),
     relay: yield* envText("PI_CLAUDE_CLI_RELAY").pipe(
       Effect.map((text): RelayMode => {
-        const value = Option.getOrElse(text, () => "").toLowerCase();
-        return value === "shadow" || value === "rewrite" ? value : "off";
+        const value = Option.getOrElse(text, () => "rewrite").toLowerCase();
+        return value === "shadow" || value === "off" || value === "0" || value === "false"
+          ? value === "shadow"
+            ? "shadow"
+            : "off"
+          : "rewrite";
       }),
     ),
     historyImport: yield* historyImport,

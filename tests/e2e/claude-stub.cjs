@@ -79,7 +79,18 @@ if (process.env.CLAUDE_STUB_ENV_FILE) {
   fs.writeFileSync(
     process.env.CLAUDE_STUB_ENV_FILE,
     JSON.stringify({
-      anthropic: Object.keys(process.env).filter((key) => key.startsWith("ANTHROPIC_")),
+      anthropic: Object.keys(process.env).filter(
+        (key) =>
+          key.startsWith("ANTHROPIC_") &&
+          // The provider's own turn relay, on loopback, is the one allowed.
+          !(
+            key === "ANTHROPIC_BASE_URL" &&
+            /^http:\/\/127\.0\.0\.1:\d+\/relay\//.test(process.env[key] ?? "")
+          ),
+      ),
+      relayBaseUrl: /^http:\/\/127\.0\.0\.1:\d+\/relay\//.test(
+        process.env.ANTHROPIC_BASE_URL ?? "",
+      ),
       mcpToolTimeout: process.env.MCP_TOOL_TIMEOUT ?? null,
       disableAutoCompact: process.env.DISABLE_AUTO_COMPACT ?? null,
       disableCompact: process.env.DISABLE_COMPACT ?? null,
