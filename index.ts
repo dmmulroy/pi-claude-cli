@@ -22,7 +22,6 @@ import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-  accountModelsEnabled,
   builtinProviderModels,
   createModelRefresh,
   type ProviderModel,
@@ -37,6 +36,7 @@ import {
   providerAuthCheck,
 } from "./src/cli-auth.ts";
 import { createEventBridge } from "./src/event-bridge.ts";
+import { resolveProviderSettings } from "./src/provider-env.ts";
 import { rewriteOverflowMessage } from "./src/overflow.ts";
 import type { ProviderRuntime } from "./src/provider-runtime.ts";
 import { endStreamWithError } from "./src/terminal-event.ts";
@@ -190,11 +190,20 @@ export default function (pi: ExtensionAPI) {
         // list-price cost "(sub)".
         apiKey: {
           name: "Claude Code login",
-          check: async ({ signal }) => providerAuthCheck(await authStatus.status(signal)),
-          resolve: async () => ({
-            auth: { apiKey: "unused" },
-            source: "Claude Code CLI",
-          }),
+          // Both read the provider's settings through pi first, so the
+          // launches, the probes and this check see the same installation.
+          check: async ({ ctx, signal }) => {
+            await resolveProviderSettings(ctx);
+            return providerAuthCheck(await authStatus.status(signal));
+          },
+          resolve: async ({ ctx }) => {
+            const env = await resolveProviderSettings(ctx);
+            return {
+              auth: { apiKey: "unused" },
+              ...(Object.keys(env).length > 0 ? { env } : {}),
+              source: "Claude Code CLI",
+            };
+          },
         },
         // Present only so pi knows the OAuth-shaped check above is a
         // subscription. It never logs in: `claude auth login` does.
@@ -209,21 +218,16 @@ export default function (pi: ExtensionAPI) {
         },
       },
       getModels: () => models,
-      // pi 1.x refreshes dynamic lists; `PI_CLAUDE_CLI_MODELS=builtin`
-      // keeps the built-in catalogue above.
-      ...(accountModelsEnabled()
-        ? {
-            refreshModels: async (context) => {
-              const refreshed = (await refreshModels(context)).map(piModel);
-              if (context.signal.aborted) return;
-              await context.publish({
-                update: () => {
-                  models = refreshed;
-                },
-              });
-            },
-          }
-        : {}),
+      // pi 1.x refreshes dynamic lists.
+      refreshModels: async (context) => {
+        const refreshed = (await refreshModels(context)).map(piModel);
+        if (context.signal.aborted) return;
+        await context.publish({
+          update: () => {
+            models = refreshed;
+          },
+        });
+      },
       // Only this provider's own api reaches here, whose options are pi's
       // stream options; pi's composer serves `stream` with `streamSimple`
       // for extension providers in the same way.

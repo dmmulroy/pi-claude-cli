@@ -13,11 +13,25 @@
  */
 
 import type { Api, AssistantMessageEventStream, Model } from "@earendil-works/pi-ai";
-import { Cause, type Crypto, Effect, Exit, Layer, ManagedRuntime, Option } from "effect";
-import { ClaudeProcessPool, claudeProcessPoolLayer } from "./claude-process-pool.ts";
+import {
+  Cause,
+  ConfigProvider,
+  type Crypto,
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Option,
+} from "effect";
+import { claudeCliLayerWithoutDependencies } from "./claude-cli.ts";
+import {
+  ClaudeProcessPool,
+  claudeProcessPoolLayerWithoutDependencies,
+} from "./claude-process-pool.ts";
 import { type EpisodeEnd, type EpisodeInput, type EpisodeOptions, runEpisode } from "./episode.ts";
 import { createEventBridge, type EventBridge } from "./event-bridge.ts";
-import { nodeCryptoLayer } from "./node-platform.ts";
+import { nodeChildProcessSpawnerLayer, nodeCryptoLayer } from "./node-platform.ts";
+import { providerEnv } from "./provider-env.ts";
 import { piContext } from "./pi-context.ts";
 import { ProviderConfig, providerConfigLayer } from "./provider-config.ts";
 import { RuntimeDirectory, runtimeDirectoryLayer } from "./runtime-directory.ts";
@@ -64,24 +78,34 @@ const buildSpanLayer = Layer.effectDiscard(
     yield* Effect.annotateCurrentSpan({
       runtimeDirectory: directory.available ? "ready" : "unavailable",
       toolBridge: "inband",
-      handoffProxy: config.handoffProxy,
+      relay: config.relay,
       traceWire: config.traceWireDetail,
     });
   }).pipe(Effect.withSpan("ProviderRuntime.build", { root: true })),
 );
 
-const servicesLayer = Layer.mergeAll(
-  providerConfigLayer,
-  runtimeDirectoryLayer,
-  claudeProcessPoolLayer,
-  nodeCryptoLayer,
-);
+/**
+ * Every provider service over the real CLI and file system, with one
+ * `ProviderConfig` for all of them: scenarios and benchmarks pass their own.
+ */
+export const providerLayerWith = (configLayer: Layer.Layer<ProviderConfig>) => {
+  const config = Layer.fresh(configLayer);
+  const cli = claudeCliLayerWithoutDependencies.pipe(
+    Layer.provide(Layer.merge(nodeChildProcessSpawnerLayer, config)),
+  );
+  const services = Layer.mergeAll(
+    config,
+    runtimeDirectoryLayer,
+    claudeProcessPoolLayerWithoutDependencies.pipe(Layer.provide(Layer.merge(cli, config))),
+    nodeCryptoLayer,
+  );
+  return Layer.merge(services, buildSpanLayer.pipe(Layer.provide(services))).pipe(
+    Layer.provideMerge(tracingLayer),
+  );
+};
 
 /** Every provider service over the real CLI, file system and environment. */
-export const providerLayer = Layer.merge(
-  servicesLayer,
-  buildSpanLayer.pipe(Layer.provide(servicesLayer)),
-).pipe(Layer.provideMerge(tracingLayer));
+export const providerLayer = providerLayerWith(providerConfigLayer);
 
 /** The error text of a failed episode, as the failure states it. */
 const causeMessage = (cause: Cause.Cause<unknown>): string => {
@@ -122,7 +146,11 @@ const pushTerminalEvent = (
 export const startProviderRuntime = <E>(
   layer: Layer.Layer<ProviderServices, E> = providerLayer,
 ): ProviderRuntime => {
-  const runtime = ManagedRuntime.make(layer);
+  // Effect's `Config` reads the settings pi resolved for the provider, over
+  // the process environment (`provider-env.ts`).
+  const runtime = ManagedRuntime.make(
+    layer.pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(providerEnv())))),
+  );
   const retireParked = Effect.gen(function* () {
     const pool = yield* ClaudeProcessPool;
     yield* pool.retireAll("shutdown");

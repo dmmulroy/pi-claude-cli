@@ -50,13 +50,6 @@ export interface ProviderModel {
 /** How long a probed account list is served before the CLI is asked again. */
 export const ACCOUNT_MODELS_TTL_MILLIS = 24 * 60 * 60 * 1000;
 
-/** `PI_CLAUDE_CLI_MODELS=builtin` keeps pi's whole Anthropic catalogue. */
-export function accountModelsEnabled(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): boolean {
-  return env.PI_CLAUDE_CLI_MODELS?.trim().toLowerCase() !== "builtin";
-}
-
 /** Claude Code's context-window marker on a model id: `claude-fable-5-1[1m]`. */
 const CONTEXT_MARKER = /\[([^\]]*)\]$/;
 /** A dated snapshot suffix: `claude-haiku-4-5-20251001`. */

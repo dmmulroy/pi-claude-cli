@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vite-plus/test";
+import { describe, it, expect } from "vite-plus/test";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { DEFAULT_THINKING_BUDGETS } from "@earendil-works/pi-ai/api/simple-options";
@@ -28,8 +28,6 @@ const enabled = (budgetTokens: number, effort: string, display = "summarized"): 
   ({ kind: "enabled", budgetTokens, effort, display }) as any;
 
 describe("resolveCliThinking: parity with pi-ai's Anthropic streamSimple", () => {
-  afterEach(() => delete process.env.PI_CLAUDE_CLI_THINKING_DISPLAY);
-
   it("pins the duplicated budgets to the installed pi-ai", () => {
     expect(PI_THINKING_BUDGETS).toEqual(DEFAULT_THINKING_BUDGETS);
   });
@@ -113,11 +111,7 @@ describe("resolveCliThinking: parity with pi-ai's Anthropic streamSimple", () =>
     });
   });
 
-  it("asks for summaries unless PI_CLAUDE_CLI_THINKING_DISPLAY=omitted", () => {
-    expect((resolveCliThinking(sonnet5, "high") as any).display).toBe("summarized");
-    process.env.PI_CLAUDE_CLI_THINKING_DISPLAY = " Omitted ";
-    expect((resolveCliThinking(sonnet5, "high") as any).display).toBe("omitted");
-    process.env.PI_CLAUDE_CLI_THINKING_DISPLAY = "whatever";
+  it("asks for summaries", () => {
     expect((resolveCliThinking(sonnet5, "high") as any).display).toBe("summarized");
   });
 });

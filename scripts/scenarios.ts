@@ -187,14 +187,14 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
   ),
   scenario(
     "parked-cap",
-    "parking past PI_CLAUDE_CLI_MAX_PARKED retires the longest-parked process",
+    "parking past SCENARIO_MAX_PARKED retires the longest-parked process",
     [
       // Each session's parking evicts the other's process.
       [...span("ClaudeProcess.retire", "cause=evicted"), ...count(2)],
       [...episode("spawnReason=noParked"), ...count(3)],
       [...span("ClaudeCli.spawn"), ...count(3)],
     ],
-    { env: { PI_CLAUDE_CLI_MAX_PARKED: "1" } },
+    { env: { SCENARIO_MAX_PARKED: "1" } },
   ),
   scenario(
     "tool-abandoned",
@@ -212,16 +212,15 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     ],
   ),
   scenario(
-    "handoff-proxy-off",
-    "with the proxy off the turn is interrupted at the tool call and reimported",
+    "no-session-tool",
+    "without a pi session the turn is interrupted at the tool call and the next call reimports",
     [
       [...episode("outcome=toolUse", "mode=spawn"), ...count(1)],
       [...span("ClaudeProcess.retire", "cause=interrupted"), ...count(1)],
-      [...episode("outcome=done", "spawnReason=noParked"), ...count(1)],
+      [...episode("outcome=done", "spawnReason=noSession"), ...count(1)],
       [...span("toolCall"), "--max-count", "0"],
       [...span("ClaudeCli.spawn"), ...count(2)],
     ],
-    { env: { PI_CLAUDE_CLI_HANDOFF_PROXY: "0" } },
   ),
   scenario(
     "changed-history",
@@ -349,7 +348,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       ],
       [...span("ClaudeProcessPool.park"), "--max-count", "0"],
     ],
-    { env: { PI_CLAUDE_CLI_TIMEOUT_MS: "350" } },
+    { env: { SCENARIO_TIMEOUT_MS: "350" } },
   ),
   scenario(
     "idle-control-traffic",
@@ -358,7 +357,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       [...episode("outcome=done"), ...count(1), "--min-ms", "500"],
       [...span("ClaudeProcess.retire", "cause=timeout"), "--max-count", "0"],
     ],
-    { env: { PI_CLAUDE_CLI_TIMEOUT_MS: "350" } },
+    { env: { SCENARIO_TIMEOUT_MS: "350" } },
   ),
   scenario(
     "structured-import",
@@ -370,8 +369,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     ],
     {
       env: {
-        PI_CLAUDE_CLI_IMPORT: "structured",
-        PI_CLAUDE_CLI_KEEPALIVE_MS: "0",
+        SCENARIO_KEEPALIVE_MS: "0",
       },
     },
   ),
@@ -388,7 +386,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       ],
       [...span("ClaudeProcess.retire", "cause=import"), "--max-count", "0"],
     ],
-    { env: { PI_CLAUDE_CLI_IMPORT: "structured", PI_CLAUDE_CLI_KEEPALIVE_MS: "0" } },
+    { env: { SCENARIO_KEEPALIVE_MS: "0" } },
   ),
   scenario(
     "signed-thinking-replay",
@@ -399,8 +397,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     ],
     {
       env: {
-        PI_CLAUDE_CLI_IMPORT: "structured",
-        PI_CLAUDE_CLI_KEEPALIVE_MS: "0",
+        SCENARIO_KEEPALIVE_MS: "0",
       },
     },
   ),
@@ -414,20 +411,10 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     ],
     {
       env: {
-        PI_CLAUDE_CLI_IMPORT: "structured",
-        PI_CLAUDE_CLI_KEEPALIVE_MS: "0",
+        SCENARIO_KEEPALIVE_MS: "0",
         CLAUDE_STUB_QUERY_HELD: "1",
       },
     },
-  ),
-  scenario(
-    "flat-import",
-    "PI_CLAUDE_CLI_IMPORT=flat gives a fresh process the history as one text message",
-    [
-      [...episode("mode=spawn", "import=flat"), ...count(2)],
-      [...span("ClaudeProcess.importHistory"), "--max-count", "0"],
-    ],
-    { env: { PI_CLAUDE_CLI_IMPORT: "flat", PI_CLAUDE_CLI_KEEPALIVE_MS: "0" } },
   ),
   scenario("process-dies", "a process that dies mid-turn fails the episode with its stderr", [
     [...episode("outcome=error"), "--status", "error", ...count(1)],
@@ -523,7 +510,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
         "ClaudeProcessPool.park,ClaudeProcess.retire[cause=idle],episode[spawnReason=noParked]",
       ],
     ],
-    { env: { PI_CLAUDE_CLI_KEEPALIVE_MS: "300" } },
+    { env: { SCENARIO_KEEPALIVE_MS: "300" } },
   ),
   scenario(
     "no-session",
@@ -591,10 +578,9 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
   scenario(
     "launch-flags",
     "the launch keeps host guards and account selection and never uses --bare",
-    [[...span("ClaudeCli.spawn", "flags~--settings"), ...count(1)]],
+    [[...span("ClaudeCli.spawn"), ...count(1)]],
     {
       env: {
-        PI_CLAUDE_CLI_SETTINGS: "/host/guards.json",
         CLAUDE_SECURESTORAGE_CONFIG_DIR: "/account/selected",
         CLAUDE_CODE_DISABLE_CLAUDE_MDS: "0",
       },
@@ -694,7 +680,7 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
       [...span("ClaudeProcess.retire", "cause=import"), "--max-count", "0"],
       [...span("ClaudeCli.spawn"), ...count(3)],
     ],
-    { live: true, env: { PI_CLAUDE_CLI_IMPORT: "structured" } },
+    { live: true },
   ),
   scenario(
     "live-parallel-tools",

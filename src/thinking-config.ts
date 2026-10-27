@@ -69,14 +69,11 @@ export const PI_THINKING_BUDGETS: Required<
 const MIN_BUDGET_TOKENS = 1024;
 
 /**
- * The display the CLI is asked for. Summaries by default, as pi-ai sends:
- * billing counts the full thinking either way, so showing it costs nothing.
- * `PI_CLAUDE_CLI_THINKING_DISPLAY=omitted` opts out.
+ * The display the CLI is asked for: summaries, as pi-ai sends. Billing
+ * counts the full thinking either way, so showing it costs nothing.
  */
 export function resolveThinkingDisplay(): ThinkingDisplay {
-  return process.env.PI_CLAUDE_CLI_THINKING_DISPLAY?.trim().toLowerCase() === "omitted"
-    ? "omitted"
-    : "summarized";
+  return "summarized";
 }
 
 /** pi-ai `thinkingBudgetForLevel`: xhigh/max clamp to high, custom wins. */
@@ -148,7 +145,7 @@ export function resolveCliThinking(
  * model list is used, to pick which catalogue models the provider offers
  * (`src/account-models.ts`); it is Claude Code's picker for the account,
  * not an access check (Opus 4.5 and Sonnet 4.5 are absent from it and run
- * fine), which is why `PI_CLAUDE_CLI_MODELS=builtin` exists.
+ * fine).
  */
 export function cliThinkingLevelMap(model: {
   thinkingLevelMap?: ThinkingLevelMap | null;

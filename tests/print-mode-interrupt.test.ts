@@ -100,6 +100,6 @@ describe("InactivityTimeout", () => {
     const message = new InactivityTimeout({ seconds: 300 }).message;
     expect(message).toContain("stalled");
     expect(message).toContain("timed out after 300 seconds without output");
-    expect(message).toContain("PI_CLAUDE_CLI_TIMEOUT_MS");
+    expect(message).toContain("retry.provider.timeoutMs");
   });
 });

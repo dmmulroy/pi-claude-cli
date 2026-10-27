@@ -78,13 +78,14 @@ export class StreamMismatchError extends Data.TaggedError("StreamMismatchError")
 
 /**
  * The CLI wrote nothing to stdout for the configured idle timeout
- * (`PI_CLAUDE_CLI_TIMEOUT_MS`) while pi was waiting for it.
+ * (pi's `retry.provider.timeoutMs`, five minutes by default) while pi was
+ * waiting for it.
  */
 export class InactivityTimeout extends Data.TaggedError("InactivityTimeout")<{
   readonly seconds: number;
 }> {
   override get message(): string {
-    return `Claude CLI stalled: it timed out after ${this.seconds} seconds without output and was stopped. Retry the request; raise PI_CLAUDE_CLI_TIMEOUT_MS (milliseconds) if the model legitimately needs longer.`;
+    return `Claude CLI stalled: it timed out after ${this.seconds} seconds without output and was stopped. Retry the request; raise pi's retry.provider.timeoutMs setting (milliseconds) if the model legitimately needs longer.`;
   }
 }
 

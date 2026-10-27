@@ -27,6 +27,7 @@ import {
   claudeInstallationKey,
   withoutSubscriptionOverrides,
 } from "./subscription-env.ts";
+import { providerEnv } from "./provider-env.ts";
 
 /** What `claude auth status` says about the CLI's login. */
 export interface CliAuthStatus {
@@ -84,7 +85,7 @@ export function probeCliAuthStatus(signal?: AbortSignal): Promise<CliAuthStatus>
       claudeCommand(),
       ["auth", "status"],
       {
-        env: { ...withoutSubscriptionOverrides(process.env), ...claudeConfigEnvironment() },
+        env: { ...withoutSubscriptionOverrides(providerEnv()), ...claudeConfigEnvironment() },
         timeout: AUTH_STATUS_TIMEOUT_MILLIS,
         killSignal: "SIGKILL",
         ...(signal === undefined ? {} : { signal }),
@@ -106,7 +107,7 @@ export function probeCliAuthStatus(signal?: AbortSignal): Promise<CliAuthStatus>
 
 /** `$XDG_STATE_HOME/pi-claude-cli/auth-status.json`, or under `~/.local/state`. */
 export function defaultCliAuthStatusFile(
-  env: Readonly<Record<string, string | undefined>> = process.env,
+  env: Readonly<Record<string, string | undefined>> = providerEnv(),
 ): string {
   const state = env.XDG_STATE_HOME?.trim();
   // Another installation (PI_CLAUDE_CLI_COMMAND / _CONFIG_DIR) keeps its own.

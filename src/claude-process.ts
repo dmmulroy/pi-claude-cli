@@ -90,7 +90,7 @@ export type RetireCause =
   | "timeout"
   /** pi aborted the episode it was serving. */
   | "abort"
-  /** Its turn was interrupted at a tool call (handoff proxy off). */
+  /** Its turn was interrupted at a tool call (a call without a pi session). */
   | "interrupted"
   /** Its turn ended and nothing parks it (no pi session, or keepalive off). */
   | "unparked"
@@ -98,7 +98,7 @@ export type RetireCause =
   | "replaced"
   /** Its call ran while another call of the same pi session was in flight. */
   | "concurrent"
-  /** More processes were parked than `PI_CLAUDE_CLI_MAX_PARKED` allows. */
+  /** More processes were parked than the pool allows. */
   | "evicted"
   /** The process ended on its own. */
   | "exited"

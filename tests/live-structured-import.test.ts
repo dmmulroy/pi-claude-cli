@@ -35,7 +35,9 @@ import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { Type } from "typebox";
 import { describe, expect, it } from "vite-plus/test";
 import type { EpisodeOptions } from "../src/episode";
-import { startProviderRuntime } from "../src/provider-runtime";
+import { Duration, Option } from "effect";
+import { providerConfigLayerWith } from "../src/provider-config";
+import { providerLayerWith, startProviderRuntime } from "../src/provider-runtime";
 import { readSignedThinking } from "../src/signed-thinking";
 
 interface WireRequest {
@@ -185,11 +187,20 @@ const tools: Tool[] = [
 // Long enough to be cached: the API caches nothing under ~2k tokens on Haiku.
 const SYSTEM_PROMPT = `You are a careful assistant in a test harness. ${"Follow instructions exactly and keep answers short. ".repeat(400)}`;
 
-/** One provider runtime with the given import mode; calls like pi does. */
-function session(importMode: "structured" | "flat", keepalive: boolean) {
-  process.env.PI_CLAUDE_CLI_IMPORT = importMode;
-  process.env.PI_CLAUDE_CLI_KEEPALIVE_MS = keepalive ? "600000" : "0";
-  const runtime = startProviderRuntime();
+/**
+ * One provider runtime; calls like pi does. The CLI talks to this test's
+ * recording proxy, so the turn relay is off.
+ */
+function session(importMode: "structured", keepalive: boolean) {
+  process.env.PI_CLAUDE_CLI_RELAY = "off";
+  const runtime = startProviderRuntime(
+    providerLayerWith(
+      providerConfigLayerWith({
+        keepalive: keepalive ? Option.some(Duration.minutes(10)) : Option.none(),
+        relay: "off",
+      }),
+    ),
+  );
   const call = async (messages: Message[], options: EpisodeOptions = {}) => {
     const stream = createAssistantMessageEventStream();
     runtime.startEpisode(
@@ -293,8 +304,7 @@ describe.skipIf(process.env.PI_OWNED_LIVE !== "1")("live: structured history imp
       expect(structure(structured.request.shape)).toEqual(structure(warmRequest.shape));
     } finally {
       process.env.PATH = path;
-      delete process.env.PI_CLAUDE_CLI_IMPORT;
-      delete process.env.PI_CLAUDE_CLI_KEEPALIVE_MS;
+      delete process.env.PI_CLAUDE_CLI_RELAY;
       await proxy.close();
       rmSync(dir, { recursive: true, force: true });
     }

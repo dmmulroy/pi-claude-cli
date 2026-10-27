@@ -43,7 +43,7 @@ fi
 run_pi() {
   # `</dev/null` because print mode still reads stdin: inherit a pipe that
   # never closes (a CI runner, an agent shell) and pi waits on EOF forever.
-  cd "$WORK_DIR" && PI_CLAUDE_CLI_KEEPALIVE_MS=0 PATH="$STUB_DIR:$PATH" ${TIMEOUT[@]+"${TIMEOUT[@]}"} \
+  cd "$WORK_DIR" && PATH="$STUB_DIR:$PATH" ${TIMEOUT[@]+"${TIMEOUT[@]}"} \
     pi -ne -e "$EXT_DIR" -p --model "pi-claude-cli/claude-haiku-4-5" "$1" \
     </dev/null
 }
@@ -65,7 +65,7 @@ fi
 ARGV_FILE="$WORK_DIR/argv.jsonl"
 run_thinking() {
   : >"$ARGV_FILE"
-  cd "$WORK_DIR" && CLAUDE_STUB_ARGV_FILE="$ARGV_FILE" PI_CLAUDE_CLI_KEEPALIVE_MS=0 PATH="$STUB_DIR:$PATH" ${TIMEOUT[@]+"${TIMEOUT[@]}"} \
+  cd "$WORK_DIR" && CLAUDE_STUB_ARGV_FILE="$ARGV_FILE" PATH="$STUB_DIR:$PATH" ${TIMEOUT[@]+"${TIMEOUT[@]}"} \
     pi -ne -e "$EXT_DIR" -p --model "pi-claude-cli/claude-haiku-4-5" --thinking "$1" "magic word" \
     </dev/null >/dev/null
   grep -- '--input-format' "$ARGV_FILE" | tail -1

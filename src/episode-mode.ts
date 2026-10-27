@@ -21,7 +21,6 @@ export interface LaunchSignature {
   readonly prompt: string;
   readonly cwd: string;
   readonly handoff: boolean;
-  readonly settings: string;
 }
 
 /** The pi history a process has acknowledged: a prefix length and its hash. */
@@ -97,13 +96,9 @@ export const latestAssistantIsForeign = (messages: ReadonlyArray<Message>): bool
   );
 };
 
-const SIGNATURE_KEYS = [
-  "model",
-  "prompt",
-  "cwd",
-  "handoff",
-  "settings",
-] as const satisfies ReadonlyArray<keyof LaunchSignature>;
+const SIGNATURE_KEYS = ["model", "prompt", "cwd", "handoff"] as const satisfies ReadonlyArray<
+  keyof LaunchSignature
+>;
 
 /** The first launch setting that differs, if any. */
 export const firstSignatureDifference = (

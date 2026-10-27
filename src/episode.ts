@@ -60,7 +60,12 @@ import { RuntimeDirectory } from "./runtime-directory.ts";
 import { providerThinkingLevel, resolveCliThinking } from "./thinking-config.ts";
 import { isHandoffClaudeTool } from "./tool-mapping.ts";
 import { recordSpanEvent } from "./tracing.ts";
-import { isChargedToUsageCredits, usageCreditsChargeMessage } from "./usage-credits.ts";
+import {
+  isChargedToUsageCredits,
+  usageCreditsAllowed,
+  usageCreditsChargeMessage,
+} from "./usage-credits.ts";
+import { providerEnv } from "./provider-env.ts";
 import {
   addTokenUsage,
   maxTokenUsage,
@@ -171,15 +176,21 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
   );
   const cwd = options.cwd ?? process.cwd();
   const thinking = resolveCliThinking(model, options.reasoning, options.thinkingBudgets);
-  // Holding a tool call open needs a pi session to route the answer back to.
-  const allowHandoff = config.handoffProxy && Option.isSome(piSessionId);
+  // Holding a tool call open needs a pi session to route the answer back to;
+  // without one the turn is interrupted at the tool call instead.
+  const allowHandoff = Option.isSome(piSessionId);
+  // pi's own timeout, when it sets one, bounds the CLI's silence.
+  const inactivityTimeout =
+    options.timeoutMs !== undefined && options.timeoutMs > 0
+      ? Duration.millis(options.timeoutMs)
+      : config.inactivityTimeout;
+  const allowUsageCredits = usageCreditsAllowed({ ...providerEnv(), ...options.env });
   const tools = mcpToolDefinitions(request.tools);
   const signature: LaunchSignature = {
     model: model.id,
     prompt: request.systemPrompt,
     cwd,
     handoff: allowHandoff,
-    settings: Option.getOrElse(config.settingsPath, () => ""),
   };
   yield* Effect.annotateCurrentSpan({
     piSession: Option.getOrElse(piSessionId, () => "none"),
@@ -210,7 +221,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
       "rateLimit.status": info.status ?? "unknown",
       "rateLimit.usageCredits": charged,
     });
-    if (charged && !config.allowUsageCredits)
+    if (charged && !allowUsageCredits)
       return yield* new UsageCreditsChargeError({
         message: usageCreditsChargeMessage(info),
       });
@@ -321,10 +332,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
       yield* pool.retireInBackground(parked.value, retireCauseForSpawn(reason));
     }
     // The history as the messages themselves, when asked for and possible.
-    const frames =
-      config.historyImport === "structured"
-        ? Option.fromUndefinedOr(structuredReplay(messages, model.id))
-        : Option.none();
+    const frames = Option.fromUndefinedOr(structuredReplay(messages, model.id));
     const first = yield* launchProcess;
     if (Option.isNone(frames) || !first.takesStructuredImport) {
       yield* Effect.annotateCurrentSpan({ import: "flat" });
@@ -357,7 +365,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
     let firstTokenMillis = Option.none<number>();
     // A tool_use block streamed in the current assistant message.
     let sawToolCall = false;
-    // We asked the CLI to end the turn (handoff proxy off): stream content
+    // We asked the CLI to end the turn (no pi session to hold it for): stream content
     // is frozen and only the result envelope is awaited.
     let selfInterrupted = false;
 
@@ -378,13 +386,13 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
      * never reaches the inbox and still proves the CLI is alive.
      */
     const takeMessage = Effect.gen(function* () {
-      const limitMillis = Duration.toMillis(config.inactivityTimeout);
+      const limitMillis = Duration.toMillis(inactivityTimeout);
       while (true) {
         const quietSince = Math.max(startedAtMillis, yield* process.lastOutputAtMillis);
         const remainingMillis = limitMillis - ((yield* Clock.currentTimeMillis) - quietSince);
         if (remainingMillis <= 0)
           return yield* new InactivityTimeout({
-            seconds: Duration.toSeconds(config.inactivityTimeout),
+            seconds: Duration.toSeconds(inactivityTimeout),
           });
         const taken = yield* Queue.take(process.inbox).pipe(
           Effect.timeoutOption(Duration.millis(remainingMillis)),
@@ -555,10 +563,9 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
       // A structured process gets the new user message as a fresh import
       // would give it, so a later import of the same history sends the
       // model the same request; a text-imported one gets role labels.
-      const structuredTurn =
-        config.historyImport === "structured" && process.takesStructuredImport
-          ? structuredReplay(delta, model.id)
-          : undefined;
+      const structuredTurn = process.takesStructuredImport
+        ? structuredReplay(delta, model.id)
+        : undefined;
       const last = structuredTurn?.[structuredTurn.length - 1];
       yield* process.writeUser(last?.kind === "user" ? last.content : replayPiMessages(delta));
     }

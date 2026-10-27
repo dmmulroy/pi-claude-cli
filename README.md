@@ -82,13 +82,13 @@ The next call continues the same process only when its results are exactly the c
 ```text
 on(model call)
   if the parked process acknowledged exactly this history's prefix
-     and its model, prompt, cwd and settings match
+     and its model, prompt and cwd match
     send only what is new                        # warm
   else
     retire it, launch a fresh process, import the history
 ```
 
-Thinking-level and tool-list changes are applied to the live process; they don't force a fresh one. A fresh process gets the history **structured**: real messages, `tool_use` / `tool_result` blocks, and Claude's signed thinking while the message is unchanged. On a CLI older than 2.1.292, or one that refuses the import, it falls back to one labelled text message (`PI_CLAUDE_CLI_IMPORT=flat` forces this).
+Thinking-level and tool-list changes are applied to the live process; they don't force a fresh one. A fresh process gets the history **structured**: real messages, `tool_use` / `tool_result` blocks, and Claude's signed thinking while the message is unchanged. On a CLI older than 2.1.292, or one that refuses the import, it falls back to one labelled text message.
 
 ### Who owns what
 
@@ -108,7 +108,7 @@ Each parked process holds about 500 MB. The pool keeps one per pi session, for a
 on(park)
   if another call of this session holds the lease → retire this one
   keep it for the session
-  while more than PI_CLAUDE_CLI_MAX_PARKED are parked
+  while more than 4 are parked
     retire the longest-parked, preferring one not inside a tool call
 ```
 
@@ -179,29 +179,26 @@ The charged call is already paid for; the guard stops pi's agent loop from makin
 
 ## Configuration
 
-All optional. A value that doesn't parse falls back to its default.
+All optional. Set them in your shell or in pi's provider settings: the provider reads them through pi's auth hooks, as pi's own providers do.
 
-| Variable                            | Default      | Purpose                                                                                                                          |
-| ----------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `PI_CLAUDE_CLI_KEEPALIVE_MS`        | `3600000`    | how long a parked process waits; `0` parks nothing                                                                               |
-| `PI_CLAUDE_CLI_MAX_PARKED`          | `4`          | most processes parked at once                                                                                                    |
-| `PI_CLAUDE_CLI_TIMEOUT_MS`          | `300000`     | longest CLI silence during a call, then an error and a kill                                                                      |
-| `PI_CLAUDE_CLI_HANDOFF_WAIT_MS`     | `1800000`    | longest wait for pi to answer a tool call                                                                                        |
-| `PI_CLAUDE_CLI_HANDOFF_PROXY`       | on           | `0` ends the turn at each tool call instead of holding it open                                                                   |
-| `PI_CLAUDE_CLI_IMPORT`              | `structured` | `flat` imports history as one text message                                                                                       |
-| `PI_CLAUDE_CLI_RELAY`               | `rewrite`    | `shadow` or `off`; see [the turn relay](#the-turn-relay)                                                                         |
-| `PI_CLAUDE_CLI_RELAY_DUMP`          | unset        | directory for relayed request bodies, as sent (`.json`) and as the CLI wrote them (`.cli`); conversation content, debugging only |
-| `PI_CLAUDE_CLI_COMMAND`             | `claude`     | the Claude Code executable: a path, or a name on `PATH`                                                                          |
-| `PI_CLAUDE_CLI_CONFIG_DIR`          | unset        | Claude Code's config directory, passed as `CLAUDE_CONFIG_DIR`                                                                    |
-| `PI_CLAUDE_CLI_MODELS`              | account      | `builtin` lists pi's whole Anthropic catalogue                                                                                   |
-| `PI_CLAUDE_CLI_THINKING_DISPLAY`    | `summarized` | `omitted` returns no thinking summaries                                                                                          |
-| `PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS` | unset        | `1` allows calls charged to usage credits                                                                                        |
-| `PI_CLAUDE_CLI_SETTINGS`            | unset        | a Claude Code settings file (hooks, permissions), passed as `--settings`                                                         |
-| `PI_CLAUDE_CLI_TRACE`               | daily file   | trace file path, or `off`                                                                                                        |
-| `PI_CLAUDE_CLI_TRACE_WIRE`          | counts       | `1`: one event per wire message; `raw`: raw lines, content included                                                              |
-| `MCP_TOOL_TIMEOUT`                  | `3600000`    | the CLI's own MCP call timeout                                                                                                   |
+| Variable                            | Default    | Purpose                                                 |
+| ----------------------------------- | ---------- | ------------------------------------------------------- |
+| `PI_CLAUDE_CLI_COMMAND`             | `claude`   | the Claude Code executable: a path, or a name on `PATH` |
+| `PI_CLAUDE_CLI_CONFIG_DIR`          | unset      | Claude Code's config directory, as `CLAUDE_CONFIG_DIR`  |
+| `PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS` | unset      | `1` allows calls charged to usage credits               |
+| `PI_CLAUDE_CLI_TRACE`               | daily file | trace file path, or `off`                               |
 
-**Never passed to the CLI**, because they would move it off your subscription: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` (except the relay's own), `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `ANTHROPIC_AWS_API_KEY`, and `CLAUDE_CODE_USE_BEDROCK` / `_MANTLE` / `_VERTEX` / `_FOUNDRY` / `_ANTHROPIC_AWS`. A host's `CLAUDE_CODE_EXTRA_BODY` is dropped as well. Managed policy and explicit host settings still apply.
+The CLI's silence limit is pi's own request timeout, `retry.provider.timeoutMs` (five minutes by default). Everything else is fixed: a parked process waits an hour (30 minutes inside a tool call), at most four are parked, history goes in structured with an automatic text fallback, thinking comes back summarized.
+
+### Debugging
+
+| Variable                   | Default   | Purpose                                                                                              |
+| -------------------------- | --------- | ---------------------------------------------------------------------------------------------------- |
+| `PI_CLAUDE_CLI_RELAY`      | `rewrite` | `shadow` records without rewriting; `off` bypasses the relay; see [the turn relay](#the-turn-relay)  |
+| `PI_CLAUDE_CLI_RELAY_DUMP` | unset     | directory for relayed request bodies, as sent (`.json`) and as the CLI wrote them (`.cli`); content! |
+| `PI_CLAUDE_CLI_TRACE_WIRE` | counts    | `1`: one event per wire message; `raw`: raw lines, content included                                  |
+
+**Never passed to the CLI**, because they would move it off your subscription: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL` (except the relay's own), `ANTHROPIC_FOUNDRY_API_KEY`, `ANTHROPIC_FOUNDRY_AUTH_TOKEN`, `ANTHROPIC_AWS_API_KEY`, and `CLAUDE_CODE_USE_BEDROCK` / `_MANTLE` / `_VERTEX` / `_FOUNDRY` / `_ANTHROPIC_AWS`. A host's `CLAUDE_CODE_EXTRA_BODY` is dropped as well. Managed policy still applies.
 
 ## Models
 

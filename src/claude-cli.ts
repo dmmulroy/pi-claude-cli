@@ -92,10 +92,7 @@ const AuthStatus = Schema.fromJsonString(Schema.Struct({ loggedIn: Schema.Boolea
 const decodeAuthStatus = Schema.decodeOption(AuthStatus);
 
 /** The launch flags. pi's prompt and session id are the only variable values. */
-const launchArguments = (
-  launch: ClaudeCliLaunch,
-  settingsPath: Option.Option<string>,
-): ReadonlyArray<string> => [
+const launchArguments = (launch: ClaudeCliLaunch): ReadonlyArray<string> => [
   "-p",
   "--input-format",
   "stream-json",
@@ -132,10 +129,6 @@ const launchArguments = (
   // string, so handing it a path would make the path the prompt.
   "--system-prompt-file",
   launch.systemPromptFile,
-  ...Option.match(settingsPath, {
-    onNone: () => [],
-    onSome: (path) => ["--settings", path],
-  }),
   ...thinkingSpawnArgs(launch.thinking),
   "--mcp-config",
   INBAND_MCP_CONFIG_JSON,
@@ -257,7 +250,7 @@ export const makeClaudeCli = Effect.gen(function* () {
       if (!(yield* Ref.getAndSet(authChecked, true)))
         yield* Effect.forkIn(checkAuth(), serviceScope);
 
-      const args = launchArguments(launch, config.settingsPath);
+      const args = launchArguments(launch);
       const handle = yield* spawner
         .spawn(
           ChildProcess.make(claudeCommand(), args, {

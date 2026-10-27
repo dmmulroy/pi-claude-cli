@@ -19,6 +19,12 @@ import type { ClaudeRateLimitInfo } from "./cli-protocol.ts";
 /** The variable that lets model calls be charged to usage credits. */
 export const ALLOW_USAGE_CREDITS_ENV = "PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS";
 
+/** True when `PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS` is `1`, `true` or `yes`. */
+export function usageCreditsAllowed(env: Readonly<Record<string, string | undefined>>): boolean {
+  const value = env[ALLOW_USAGE_CREDITS_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
 /** True when the limit status says the call was charged to usage credits. */
 export function isChargedToUsageCredits(info: ClaudeRateLimitInfo): boolean {
   return info.isUsingOverage === true;

@@ -50,7 +50,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - `src/mcp-inband.ts`: the in-band (`"type": "sdk"`) MCP server that advertises pi's tools on the CLI's own control channel. No socket, no helper process, no secret. A `tools/call` is held open until pi's next call delivers the result, matched on the actual tool-use id and name. A changed tool list is announced with `notifications/tools/list_changed` and confirmed by the CLI's next `tools/list`.
 - `src/cli-protocol.ts`: lenient `Schema` decoding of the CLI's NDJSON; builders for stdin lines.
 - `src/event-bridge.ts`: convert CLI stream events to pi messages. Content indexes restart each model cycle, so blocks are tracked by `(cycle, index)`.
-- `src/pi-context.ts`: normalize old/new pi context formats, import ordered messages and images (as structured frames by default, or as labelled text with `PI_CLAUDE_CLI_IMPORT=flat`), hash acknowledged history.
+- `src/pi-context.ts`: normalize old/new pi context formats, import ordered messages and images (as structured frames, or as labelled text when the CLI cannot take them), hash acknowledged history.
 - `src/signed-thinking.ts`: Claude's raw signed thinking blocks, stored on pi's assistant message under `piClaudeCli` by the event bridge (never in `diagnostics`: pi's bug report collects those) and replayed by a structured import only while the message is unchanged. Pure; imported eagerly through `event-bridge`.
 - `src/cli-auth.ts`: `claude auth status` as pi's auth check (models offered while the CLI is installed and not logged out; a subscription reports as OAuth for pi's "(sub)" label), kept in `auth-status.json` under the state directory and refreshed in the background, because pi waits for auth checks at start. Pure apart from the probe and the file; loaded at pi start.
 - `src/usage-credits.ts`: the usage-credit guard's rule and messages; every message says "billing" so pi does not retry it.
@@ -58,6 +58,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - `src/tool-call-id.ts`: tool call ids Claude would reject, mapped to valid ones in what is sent and back. pi's stored ids never change.
 - `src/thinking-config.ts`: pi thinking levels as CLI flags and live control requests.
 - `src/account-models.ts`, `src/model-probe.ts`: the model list. The first is pure and loaded at pi start: it joins the account's models with pi's catalogue and implements pi 1.x `refreshModels`. The second asks a short-lived CLI process for the account's models (`initialize`), and is loaded only when a refresh needs it.
+- `src/provider-env.ts`: the four user settings (`PI_CLAUDE_CLI_COMMAND`, `_CONFIG_DIR`, `_ALLOW_USAGE_CREDITS`, `_TRACE`), resolved through pi's auth hooks (`ctx.env`) and laid over the process environment. Everything else is fixed in `src/provider-config.ts`; scenarios change it with `providerLayerWith(providerConfigLayerWith(...))`, never through the environment.
 - `src/provider-config.ts`, `src/runtime-directory.ts`, `src/usage.ts`, `src/errors.ts`, `src/cli-requirements.ts`: configuration, the private temp directory, billing arithmetic, tagged errors, minimum CLI version.
 - `src/turn-relay.ts`: the loopback relay between a CLI process and `api.anthropic.com` (`PI_CLAUDE_CLI_RELAY=shadow|rewrite`), in the process scope; records each request as a content-free `TurnRelay.request` span. It forwards the CLI's own authorization header and never records it.
 - `src/relay-rewrite.ts`: pure request rewrites: Claude Code's session context back to message 0 (both 2.1.299 layouts), and pi's later system messages placed where they occurred. Fail closed: anything unrecognized is sent as it came.
@@ -75,7 +76,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 
 ## Conventions
 
-- Effect everywhere, including scripts, following `docs/coding-standards.md`. The exceptions are `index.ts` and what it imports eagerly (`account-models`, `cli-auth`, `event-bridge`, `overflow`, `signed-thinking`, `subscription-env`, `thinking-config`, `terminal-event`), which must not import Effect, and the stub CLI.
+- Effect everywhere, including scripts, following `docs/coding-standards.md`. The exceptions are `index.ts` and what it imports eagerly (`account-models`, `cli-auth`, `event-bridge`, `overflow`, `provider-env`, `signed-thinking`, `subscription-env`, `thinking-config`, `terminal-event`), which must not import Effect, and the stub CLI.
 - Vite+ owns the tooling: `vite.config.ts` configures oxfmt, oxlint (type-aware, with type checking) and the tests. Import test APIs from `vite-plus/test`, never `vitest`. Develop with pnpm (`packageManager`), but keep the package installable by npm: pi installs git packages with the user's package manager, and npm refuses a `devEngines` package-manager requirement.
 - Layers never fail. A failed layer build is remembered for the life of the runtime; record the failure in the service and report it per episode instead.
 - Never await a `retire` on a path that ends pi's stream; use `pool.retireInBackground`.

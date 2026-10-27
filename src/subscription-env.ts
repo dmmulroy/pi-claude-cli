@@ -4,6 +4,8 @@
  * `index.ts` runs at pi start uses it as well as every launch.
  */
 
+import { providerEnv } from "./provider-env.ts";
+
 /**
  * Environment variables that redirect the CLI away from its subscription
  * login: an API key or token, a gateway, or another model provider (Bedrock,
@@ -39,7 +41,7 @@ export function withoutSubscriptionOverrides(
  * `PATH`), or `claude`. Every launch, probe and auth check uses it.
  */
 export function claudeCommand(
-  env: Readonly<Record<string, string | undefined>> = process.env,
+  env: Readonly<Record<string, string | undefined>> = providerEnv(),
 ): string {
   const command = env.PI_CLAUDE_CLI_COMMAND?.trim();
   return command !== undefined && command.length > 0 ? command : "claude";
@@ -51,7 +53,7 @@ export function claudeCommand(
  * an inherited `CLAUDE_CONFIG_DIR` (or the CLI's default) in place.
  */
 export function claudeConfigEnvironment(
-  env: Readonly<Record<string, string | undefined>> = process.env,
+  env: Readonly<Record<string, string | undefined>> = providerEnv(),
 ): Record<string, string> {
   const directory = env.PI_CLAUDE_CLI_CONFIG_DIR?.trim();
   return directory !== undefined && directory.length > 0 ? { CLAUDE_CONFIG_DIR: directory } : {};
@@ -62,7 +64,7 @@ export function claudeConfigEnvironment(
  * default one: different installations keep their login state apart.
  */
 export function claudeInstallationKey(
-  env: Readonly<Record<string, string | undefined>> = process.env,
+  env: Readonly<Record<string, string | undefined>> = providerEnv(),
 ): string | undefined {
   const command = claudeCommand(env);
   const directory = claudeConfigEnvironment(env).CLAUDE_CONFIG_DIR;

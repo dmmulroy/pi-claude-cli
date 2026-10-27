@@ -20,15 +20,30 @@ import {
 } from "@earendil-works/pi-ai";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import * as NodeRuntime from "@effect/platform-node-shared/NodeRuntime";
-import { Config, Console, Data, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema } from "effect";
+import {
+  Config,
+  Console,
+  Data,
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Ref,
+  Schema,
+} from "effect";
 import { Type } from "typebox";
 import type { EpisodeOptions } from "../../src/episode.ts";
 import { nodeFileSystemLayer } from "../../src/node-platform.ts";
 import { RATE_LIMIT_DIAGNOSTIC } from "../../src/event-bridge.ts";
 import { readSignedThinking } from "../../src/signed-thinking.ts";
 import { isClaudeToolUseId } from "../../src/tool-call-id.ts";
+import { providerConfigLayerWith } from "../../src/provider-config.ts";
 import {
   providerLayer,
+  providerLayerWith,
   type ProviderRuntime,
   startProviderRuntime,
 } from "../../src/provider-runtime.ts";
@@ -398,12 +413,13 @@ const scenarios: Record<
       yield* Effect.sleep("300 millis");
     }),
 
-  "handoff-proxy-off": (session) =>
+  "no-session-tool": (session) =>
     Effect.gen(function* () {
-      const asked = yield* session.say("please tool:read");
+      // No pi session: nothing to route a held call back to.
+      const asked = yield* session.say("please tool:read", { sessionId: "" });
       yield* expect(asked.stopReason === "toolUse", `expected toolUse, got ${asked.stopReason}`);
       yield* session.answerToolCalls("FILE-CONTENT");
-      yield* expectDone(yield* session.call(), "PORT-OK");
+      yield* expectDone(yield* session.call({ sessionId: "" }), "PORT-OK");
     }),
 
   "changed-history": (session) =>
@@ -622,17 +638,6 @@ const scenarios: Record<
       yield* Effect.sleep("300 millis");
     }),
 
-  "flat-import": (session) =>
-    Effect.gen(function* () {
-      yield* expectDone(yield* session.say("hello"), "PORT-OK");
-      yield* expectDone(yield* session.say("and now?"), "PORT-OK");
-      const frames = yield* stdinFrames;
-      yield* expect(
-        frames.every((frame) => frame.type === "user" && !frame.held),
-        `expected only plain user messages, got ${JSON.stringify(frames.map((frame) => [frame.type, frame.held]))}`,
-      );
-    }),
-
   "process-dies": (session) =>
     Effect.gen(function* () {
       const answer = yield* session.say("die");
@@ -756,8 +761,8 @@ const scenarios: Record<
       const argv = yield* launchArgv;
       const after = (flag: string) => argv[argv.indexOf(flag) + 1];
       yield* expect(
-        after("--settings") === "/host/guards.json",
-        `expected the host settings file to be passed through, got ${after("--settings")}`,
+        !argv.includes("--settings"),
+        `expected no --settings: host settings come from managed policy only, got ${JSON.stringify(argv)}`,
       );
       // Empty arguments must survive the launch: a shell would drop them.
       yield* expect(
@@ -977,6 +982,30 @@ const layerBuildFailureScenario = Effect.gen(function* () {
   yield* Effect.promise(() => runtime.dispose());
 });
 
+/**
+ * The provider's fixed values a scenario changes, from the runner's
+ * environment (`SCENARIO_KEEPALIVE_MS`, `SCENARIO_MAX_PARKED`,
+ * `SCENARIO_TIMEOUT_MS`): the product reads none of these.
+ */
+const scenarioConfigLayer = Effect.gen(function* () {
+  const millis = (name: string) =>
+    Config.option(Config.Number(name)).pipe(Effect.orElseSucceed(() => Option.none<number>()));
+  const keepalive = yield* millis("SCENARIO_KEEPALIVE_MS");
+  const maxParked = yield* millis("SCENARIO_MAX_PARKED");
+  const timeout = yield* millis("SCENARIO_TIMEOUT_MS");
+  return providerConfigLayerWith({
+    ...Option.match(keepalive, {
+      onNone: () => ({}),
+      onSome: (ms) => ({ keepalive: ms > 0 ? Option.some(Duration.millis(ms)) : Option.none() }),
+    }),
+    ...Option.match(maxParked, { onNone: () => ({}), onSome: (n) => ({ maxParked: n }) }),
+    ...Option.match(timeout, {
+      onNone: () => ({}),
+      onSome: (ms) => ({ inactivityTimeout: Duration.millis(ms) }),
+    }),
+  });
+});
+
 const runScenario = (name: string) => {
   if (name === "session-shutdown") return shutdownScenario;
   if (name === "layer-build-failure") return layerBuildFailureScenario;
@@ -988,7 +1017,7 @@ const runScenario = (name: string) => {
       }),
     );
   return Effect.gen(function* () {
-    const runtime = startProviderRuntime();
+    const runtime = startProviderRuntime(providerLayerWith(yield* scenarioConfigLayer));
     const session = yield* scenarioSession(runtime);
     yield* scenario(session).pipe(Effect.ensuring(Effect.promise(() => runtime.dispose())));
   });

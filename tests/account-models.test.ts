@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   ACCOUNT_MODELS_TTL_MILLIS,
   accountModelIds,
-  accountModelsEnabled,
   builtinProviderModels,
   type CatalogueModel,
   type CliAccountModel,
@@ -229,14 +228,6 @@ describe("isAccountModelsFresh", () => {
     expect(isAccountModelsFresh(undefined, now)).toBe(false);
     expect(isAccountModelsFresh({}, now)).toBe(false);
     expect(isAccountModelsFresh({ checkedAt: now + 60_000 }, now)).toBe(false);
-  });
-});
-
-describe("accountModelsEnabled", () => {
-  it("is on unless PI_CLAUDE_CLI_MODELS=builtin", () => {
-    expect(accountModelsEnabled({})).toBe(true);
-    expect(accountModelsEnabled({ PI_CLAUDE_CLI_MODELS: "account" })).toBe(true);
-    expect(accountModelsEnabled({ PI_CLAUDE_CLI_MODELS: " Builtin " })).toBe(false);
   });
 });
 
