@@ -23,7 +23,12 @@ import * as https from "node:https";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { Effect, Queue, Schema, type Scope } from "effect";
-import { canonicalSessionContext, type RewriteOutcome } from "./relay-rewrite.ts";
+import {
+  canonicalSessionContext,
+  injectSystemMessages,
+  type RewriteOutcome,
+  type SystemInjection,
+} from "./relay-rewrite.ts";
 
 /** The only origin the relay forwards to. */
 const UPSTREAM = new URL("https://api.anthropic.com");
@@ -71,6 +76,8 @@ export interface RelayRequestRecord {
   readonly streamError?: string;
   /** What the rewrites did, when they are on. */
   readonly rewrite?: RewriteOutcome;
+  /** pi system messages added to the request. */
+  readonly systemMessages?: number;
 }
 
 /** Usage as the API reported it for one response. */
@@ -109,6 +116,8 @@ export interface TurnRelay {
   readonly baseUrl: string;
   /** Every finished request, in order. */
   readonly records: Queue.Dequeue<RelayRequestRecord>;
+  /** pi's later system messages, added to every request from now on (rewrite only). */
+  readonly setSystemMessages: (injections: ReadonlyArray<SystemInjection>) => void;
 }
 
 // ---- request layout ----------------------------------------------------------
@@ -324,6 +333,7 @@ export const startTurnRelay = ({
     const sockets = new Set<{ destroy: () => void }>();
     const dump = dumpDirectory(dumpRoot, label);
     let sequence = 0;
+    let systemMessages: ReadonlyArray<SystemInjection> = [];
 
     const handle = async (request: http.IncomingMessage, response: http.ServerResponse) => {
       const startedAt = Date.now();
@@ -342,12 +352,18 @@ export const startTurnRelay = ({
       let layout: RequestLayout | undefined;
       let upstream: http.ClientRequest | undefined;
       let rewriteOutcome: RewriteOutcome | undefined;
+      let injected = 0;
       try {
         let body = await readBody(request);
+        const received = body;
         if (rewrite && path === "/v1/messages") {
           const rewritten = canonicalSessionContext(body.toString("utf8"));
           rewriteOutcome = rewritten.outcome;
-          if (rewritten.outcome === "moved") body = Buffer.from(rewritten.body, "utf8");
+          let text = rewritten.body;
+          const withSystem = injectSystemMessages(text, systemMessages);
+          injected = withSystem.injected;
+          text = withSystem.body;
+          if (rewritten.outcome === "moved" || injected > 0) body = Buffer.from(text, "utf8");
         }
         requestBytes = body.length;
         if (path === "/v1/messages")
@@ -355,14 +371,13 @@ export const startTurnRelay = ({
             body.toString("utf8"),
             headerText(request.headers["anthropic-beta"]),
           );
-        if (dump !== undefined)
-          writeFileSync(
-            join(dump, `${String(number).padStart(4, "0")}${path.replaceAll("/", "_")}.json`),
-            body,
-            {
-              mode: 0o600,
-            },
-          );
+        if (dump !== undefined) {
+          // What was sent, and what the CLI sent when the rewrites changed it.
+          const name = `${String(number).padStart(4, "0")}${path.replaceAll("/", "_")}`;
+          writeFileSync(join(dump, `${name}.json`), body, { mode: 0o600 });
+          if (received !== body)
+            writeFileSync(join(dump, `${name}.cli`), received, { mode: 0o600 });
+        }
 
         const headers: http.OutgoingHttpHeaders = {};
         for (const [name, value] of Object.entries(request.headers))
@@ -428,6 +443,7 @@ export const startTurnRelay = ({
           ...(requestId.length > 0 ? { requestId } : {}),
           ...(layout !== undefined ? { layout } : {}),
           ...(rewriteOutcome !== undefined ? { rewrite: rewriteOutcome } : {}),
+          ...(injected > 0 ? { systemMessages: injected } : {}),
           ...captured,
         });
       } catch (error) {
@@ -467,5 +483,11 @@ export const startTurnRelay = ({
         }),
     );
     const { port } = server.address() as AddressInfo;
-    return { baseUrl: `http://127.0.0.1:${port}${route}`, records };
+    return {
+      baseUrl: `http://127.0.0.1:${port}${route}`,
+      records,
+      setSystemMessages: (injections) => {
+        systemMessages = injections;
+      },
+    };
   });

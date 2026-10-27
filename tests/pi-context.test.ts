@@ -98,6 +98,7 @@ describe("pi transcript normalization", () => {
       systemPrompt: "hello",
       messages: [],
       tools: [],
+      systemUpdates: [],
     });
   });
 
@@ -106,7 +107,37 @@ describe("pi transcript normalization", () => {
       systemPrompt: "",
       messages: [],
       tools: [],
+      systemUpdates: [],
     });
+  });
+
+  it("keeps later system messages where they occurred, with native system messages", () => {
+    const messages: Message[] = [
+      { role: "system", content: "base", sections: { rules: "old rules" }, timestamp: 0 },
+      user("one"),
+      assistant([{ type: "text", text: "a" }]),
+      { role: "system", content: "", sections: { rules: "new rules" }, timestamp: 2 },
+      user("two"),
+      // A failed turn is not sent, so it does not count.
+      assistant([], { stopReason: "error" }),
+      { role: "system", content: "Be brief.", timestamp: 3 },
+      { role: "system", content: "", toolsAdded: [tool("read")], timestamp: 3 },
+      user("three"),
+      assistant([{ type: "text", text: "b" }]),
+      { role: "system", content: "Last.", timestamp: 4 },
+      user("four"),
+    ];
+    const native = piContext({ messages }, { nativeSystemMessages: true });
+    expect(native.systemPrompt).toBe("base\n\nold rules");
+    expect(native.tools.map((t) => t.name)).toEqual(["read"]);
+    expect(native.systemUpdates).toEqual([
+      { beforeAssistant: 1, text: 'Updated system prompt section "rules":\n\nnew rules' },
+      { beforeAssistant: 1, text: "Be brief." },
+      { beforeAssistant: null, text: "Last." },
+    ]);
+    const folded = piContext({ messages });
+    expect(folded.systemPrompt).toContain("new rules");
+    expect(folded.systemUpdates).toEqual([]);
   });
 });
 

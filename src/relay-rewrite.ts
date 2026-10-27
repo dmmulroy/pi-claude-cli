@@ -81,6 +81,114 @@ const findContext = (messages: Json[]): Found | undefined => {
   return undefined;
 };
 
+const SYSTEM_DATE_PREFIX = "Today's date is ";
+
+/** The text of a message's content, whether a string or one text block. */
+const soleText = (message: Json | undefined): string | undefined => {
+  if (!isObject(message)) return undefined;
+  const content = message["content"];
+  if (typeof content === "string") return content;
+  return Array.isArray(content) && content.length === 1 ? textOf(content[0]) : undefined;
+};
+
+/**
+ * The same move for models that take system messages mid conversation, for
+ * which Claude Code 2.1.299 lays the context out differently: the
+ * environment is a system message after message 0, and the date joins it.
+ *
+ *   first turn:  m0 [context, prompt]  m1 system "env\n\nToday's date is D."
+ *   import:      m0 [prompt]           m1 system "env"
+ *                ... user [context, text]  system "Today's date is D."
+ *                ... user [tool_result [X + "\n", context]]  system "Today's date is D."
+ *
+ * @returns The rewritten request, `unchanged` with nothing to move, or
+ *   undefined for a layout it does not know.
+ */
+const systemLayoutSessionContext = (
+  request: Block,
+  messages: Json[],
+  head: Json[],
+): { readonly body: string; readonly outcome: RewriteOutcome } | undefined => {
+  const environment = messages[1];
+  const environmentText = soleText(environment);
+  if (!isObject(environment) || environmentText === undefined) return undefined;
+  // The context opens a user message's text, or closes a tool result's.
+  let at = -1;
+  let take: (() => Block) | undefined;
+  for (const [index, message] of messages.entries()) {
+    if (index < 2 || !isObject(message) || message["role"] !== "user") continue;
+    const content = message["content"];
+    if (!Array.isArray(content)) continue;
+    if (isContext(content[0]) && content.length >= 2) {
+      at = index;
+      take = () => content.shift() as Block;
+      break;
+    }
+    const result = content.find(
+      (block) =>
+        isObject(block) &&
+        block["type"] === "tool_result" &&
+        Array.isArray(block["content"]) &&
+        isContext(block["content"][block["content"].length - 1]),
+    ) as Block | undefined;
+    if (result !== undefined) {
+      const inner = result["content"] as Json[];
+      const before = inner[inner.length - 2];
+      const beforeText = textOf(before);
+      const restored = beforeText === undefined ? undefined : withoutOneNewline(beforeText);
+      if (!isObject(before) || restored === undefined) return undefined;
+      at = index;
+      take = () => {
+        const context = inner.pop() as Block;
+        inner[inner.length - 1] = { ...before, text: restored };
+        return context;
+      };
+      break;
+    }
+  }
+  if (at < 0 || take === undefined) return { body: JSON.stringify(request), outcome: "unchanged" };
+  const holderContent = (messages[at] as Block)["content"] as Json[];
+  const date = messages[at + 1];
+  const dateText = soleText(date);
+  if (
+    !isObject(date) ||
+    date["role"] !== "system" ||
+    dateText === undefined ||
+    !dateText.startsWith(SYSTEM_DATE_PREFIX) ||
+    environmentText.includes(SYSTEM_DATE_PREFIX)
+  )
+    return undefined;
+
+  const { cache_control: contextBreakpoint, ...contextBlock } = take();
+  const dateContent = date["content"];
+  const dateBreakpoint =
+    Array.isArray(dateContent) && isObject(dateContent[0])
+      ? dateContent[0]["cache_control"]
+      : undefined;
+  const breakpoint = dateBreakpoint ?? contextBreakpoint;
+
+  // The context back on message 0, joined to pi's text by a newline as a
+  // first turn has it; the date back in the environment.
+  const contextText = textOf(contextBlock) ?? "";
+  head.unshift({
+    ...contextBlock,
+    text: contextText.endsWith("\n") ? contextText : `${contextText}\n`,
+  });
+  const joined = `${environmentText}\n\n${dateText}`;
+  const environmentContent = environment["content"];
+  if (typeof environmentContent === "string") environment["content"] = joined;
+  else if (Array.isArray(environmentContent) && isObject(environmentContent[0]))
+    environmentContent[0] = { ...environmentContent[0], text: joined };
+  // The breakpoint the date carried stays at the end of the conversation.
+  if (breakpoint !== undefined) {
+    const last = holderContent[holderContent.length - 1];
+    if (isObject(last))
+      holderContent[holderContent.length - 1] = { ...last, cache_control: breakpoint };
+  }
+  messages.splice(at + 1, 1);
+  return { body: JSON.stringify(request), outcome: "moved" };
+};
+
 /**
  * Move the session context of an imported process to message 0, where the
  * process's first turn would have put it.
@@ -105,6 +213,8 @@ export const canonicalSessionContext = (
     return unchanged;
   const head = first["content"];
   if (head.some(isContext)) return unchanged;
+  if (isObject(messages[1]) && messages[1]["role"] === "system")
+    return systemLayoutSessionContext(request, messages, head) ?? unrecognized;
   const found = findContext(messages);
   if (found === undefined) return unchanged;
 
@@ -158,4 +268,65 @@ export const canonicalSessionContext = (
   head[prompt - 1] = { ...lastReminder, text: lastReminderRestored };
   head.splice(prompt, 0, ...moved);
   return { body: JSON.stringify(request), outcome: "moved" };
+};
+
+/** A system message to add to the request; see `SystemUpdate` in `pi-context`. */
+export interface SystemInjection {
+  /** Before the assistant message with this ordinal, or at the end. */
+  readonly beforeAssistant: number | null;
+  readonly text: string;
+}
+
+/**
+ * Add pi's later system messages to a request where they occurred in pi's
+ * conversation: each before the assistant message that followed it, as pi's
+ * own Anthropic provider places them. One whose assistant message the
+ * request does not have (a flat import has none) goes at the end.
+ *
+ * The CLI's own history never holds them; they are added to every request,
+ * so the model sees pi's conversation however the process got its history.
+ *
+ * @returns The body to send and how many messages were added.
+ */
+export const injectSystemMessages = (
+  body: string,
+  injections: ReadonlyArray<SystemInjection>,
+): { readonly body: string; readonly injected: number } => {
+  if (injections.length === 0) return { body, injected: 0 };
+  let request: Json;
+  try {
+    request = JSON.parse(body) as Json;
+  } catch {
+    return { body, injected: 0 };
+  }
+  if (!isObject(request) || !Array.isArray(request["messages"])) return { body, injected: 0 };
+  const system = (text: string): Block => ({
+    role: "system",
+    content: [{ type: "text", text }],
+  });
+  const before = new Map<number, string[]>();
+  const atEnd: string[] = [];
+  for (const injection of injections) {
+    if (injection.beforeAssistant === null) atEnd.push(injection.text);
+    else
+      before.set(injection.beforeAssistant, [
+        ...(before.get(injection.beforeAssistant) ?? []),
+        injection.text,
+      ]);
+  }
+  const messages: Json[] = [];
+  let assistants = 0;
+  for (const message of request["messages"]) {
+    if (isObject(message) && message["role"] === "assistant") {
+      for (const text of before.get(assistants) ?? []) messages.push(system(text));
+      before.delete(assistants);
+      assistants += 1;
+    }
+    messages.push(message);
+  }
+  for (const texts of [...before.entries()].sort(([a], [b]) => a - b).map(([, texts]) => texts))
+    for (const text of texts) messages.push(system(text));
+  for (const text of atEnd) messages.push(system(text));
+  request["messages"] = messages;
+  return { body: JSON.stringify(request), injected: injections.length };
 };

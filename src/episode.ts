@@ -26,6 +26,7 @@ import type {
   SimpleStreamOptions,
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { Cause, Clock, Crypto, Duration, Effect, Exit, Option, Queue, Ref } from "effect";
 import { ClaudeProcessPool, type SessionLease } from "./claude-process-pool.ts";
 import type { IClaudeProcess, ReportedRateLimit, RetireCause } from "./claude-process.ts";
@@ -69,6 +70,18 @@ import {
   tokenUsageFromPiUsage,
   ZERO_TOKEN_USAGE,
 } from "./usage.ts";
+
+/**
+ * True for a model that takes system messages mid conversation, as pi's
+ * catalogue says (the provider's own model entries do not carry `compat`).
+ */
+const takesMidConversationSystemMessages = (model: Model<Api>): boolean => {
+  const compat = model.compat as { supportsMidConvoSystemMessages?: boolean } | undefined;
+  if (compat?.supportsMidConvoSystemMessages !== undefined)
+    return compat.supportsMidConvoSystemMessages;
+  const catalogued = getBuiltinModels("anthropic").find((entry) => entry.id === model.id);
+  return catalogued?.compat?.supportsMidConvoSystemMessages === true;
+};
 
 /** pi's stream options, plus the working directory a host may pin. */
 export type EpisodeOptions = SimpleStreamOptions & {
@@ -145,7 +158,12 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
 
   const { model, bridge } = input;
   const options: EpisodeOptions = Option.getOrElse(input.options, () => ({}));
-  const request = piContext(input.context);
+  // Later system messages stay where they occurred when the model takes
+  // them and the relay can put them on the wire; otherwise they are folded
+  // into the prompt.
+  const nativeSystemMessages =
+    config.relay === "rewrite" && takesMidConversationSystemMessages(model);
+  const request = piContext(input.context, { nativeSystemMessages });
   const messages = request.messages;
   const piSessionId = Option.filter(
     Option.fromUndefinedOr(options.sessionId),
@@ -168,6 +186,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
     model: model.id,
     messages: messages.length,
     tools: tools.length,
+    systemUpdates: request.systemUpdates.length,
   });
 
   /** The process this episode holds and has not yet parked or retired. */
@@ -225,6 +244,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
       })
       .pipe(
         Effect.tap((launched) => Ref.set(borrowed, Option.some(launched))),
+        Effect.tap((launched) => launched.setSystemMessages(request.systemUpdates)),
         Effect.uninterruptible,
       );
   });
@@ -270,6 +290,7 @@ export const runEpisode = Effect.fn("episode", { root: true })(function* (input:
         historyHashOfPrefix: (length) => historyHash(messages.slice(0, length)),
       });
     }
+    if (Option.isSome(parked)) yield* parked.value.setSystemMessages(request.systemUpdates);
     // pi owns the active tools: the process offers the model this call's
     // tools from its next request on, which on a handoff is the one that
     // follows the tool results.

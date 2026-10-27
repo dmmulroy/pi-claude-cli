@@ -66,6 +66,7 @@ import { isHandoffClaudeTool, mcpToolNameOfClaudeTool } from "./tool-mapping.ts"
 import type { CliReplayFrame } from "./pi-context.ts";
 import type { RelayMode } from "./provider-config.ts";
 import { recordSpanEvent } from "./tracing.ts";
+import type { SystemInjection } from "./relay-rewrite.ts";
 import { type RelayRequestRecord, startTurnRelay, type TurnRelay } from "./turn-relay.ts";
 import { type TokenUsage, ZERO_TOKEN_USAGE } from "./usage.ts";
 
@@ -203,6 +204,11 @@ export interface IClaudeProcess {
    * caller spawns instead.
    */
   readonly applyTools: (desired: ReadonlyArray<McpToolDefinition>) => Effect.Effect<boolean>;
+  /**
+   * pi's later system messages, added by the relay to every request from now
+   * on. Without a rewriting relay there is nowhere to put them: false.
+   */
+  readonly setSystemMessages: (updates: ReadonlyArray<SystemInjection>) => Effect.Effect<boolean>;
   /** True when pi's results for exactly these tool calls can continue the turn. */
   readonly awaitsToolCalls: (toolUseIds: ReadonlyArray<string>) => Effect.Effect<boolean>;
   /** Deliver pi's result; answers the CLI now or when its `tools/call` arrives. */
@@ -255,6 +261,7 @@ const relayRecordAttributes = (record: RelayRequestRecord): Record<string, unkno
   ...(record.stopReason !== undefined ? { stopReason: record.stopReason } : {}),
   ...(record.streamError !== undefined ? { streamError: record.streamError } : {}),
   ...(record.rewrite !== undefined ? { rewrite: record.rewrite } : {}),
+  ...(record.systemMessages !== undefined ? { systemMessages: record.systemMessages } : {}),
   ...(record.usage !== undefined
     ? {
         "usage.input": record.usage.input,
@@ -812,6 +819,12 @@ const startClaudeProcess = Effect.fnUntraced(function* (
         return JSON.stringify(serving) === JSON.stringify(desired)
           ? yield* Ref.get(alive)
           : yield* changeTools(desired);
+      }),
+    setSystemMessages: (updates) =>
+      Effect.sync(() => {
+        if (Option.isNone(relay) || launch.relay !== "rewrite") return updates.length === 0;
+        relay.value.setSystemMessages(updates);
+        return true;
       }),
     awaitsToolCalls: (toolUseIds) =>
       Effect.gen(function* () {

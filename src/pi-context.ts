@@ -3,7 +3,10 @@ import {
   type Context,
   getCurrentSystemPrompt,
   getCurrentTools,
+  getInitialSystemMessage,
+  getSystemMessageText,
   type Message,
+  renderSystemMessageUpdate,
   type Tool,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
@@ -16,29 +19,97 @@ import { replayableSignedThinking } from "./signed-thinking.ts";
 import { claudeToolName } from "./tool-mapping.ts";
 import { createToolCallIdMap, toolCallIdsOf } from "./tool-call-id.ts";
 
-/** pi's request with its current prompt and tools resolved. */
+/**
+ * A later system message of pi's, kept where it occurred: rendered as pi's
+ * own Anthropic provider renders it, and placed before the assistant message
+ * that followed it on the wire (counted from 0), or at the end.
+ */
+export interface SystemUpdate {
+  readonly beforeAssistant: number | null;
+  readonly text: string;
+}
+
+/** pi's request with its prompt and tools resolved. */
 export interface PiRequest {
+  /**
+   * The system prompt the process launches with: the current one, or with
+   * native system messages the leading message's.
+   */
   readonly systemPrompt: string;
   readonly tools: Tool[];
   /** The conversation, without system messages. */
   readonly messages: Message[];
+  /** Later system messages, with native system messages; otherwise none. */
+  readonly systemUpdates: ReadonlyArray<SystemUpdate>;
 }
 
-/** Accept both pi's legacy Context and its system-message TranscriptContext. */
-export function piContext(context: Context | TranscriptContext): PiRequest {
+/**
+ * True for an assistant message the import sends the model: failed and
+ * aborted turns are left out (as `structuredReplay` does), so they do not
+ * count when system updates are placed.
+ */
+const isSentAssistant = (message: { readonly role: string }): boolean =>
+  message.role === "assistant" &&
+  (message as Message & { role: "assistant" }).stopReason !== "error" &&
+  (message as Message & { role: "assistant" }).stopReason !== "aborted";
+
+/**
+ * Accept both pi's legacy Context and its system-message TranscriptContext.
+ *
+ * With `nativeSystemMessages` (a model that takes system messages mid
+ * conversation, behind the rewriting relay) a later system message stays a
+ * system message where it occurred, as pi's own Anthropic provider sends it,
+ * and the launch prompt is the leading one, so a prompt update does not need
+ * a fresh process. Otherwise every system message is folded into the
+ * current prompt. Tools are always the current ones.
+ */
+export function piContext(
+  context: Context | TranscriptContext,
+  options: { readonly nativeSystemMessages?: boolean } = {},
+): PiRequest {
   const transcript = context.messages.some((m) => m.role === "system");
+  const messages = context.messages.filter((m) => m.role !== "system");
+  const tools = transcript
+    ? getCurrentTools(context.messages)
+    : "tools" in context
+      ? (context.tools ?? [])
+      : [];
+  if (!transcript)
+    return {
+      systemPrompt: "systemPrompt" in context ? (context.systemPrompt ?? "") : "",
+      tools,
+      messages,
+      systemUpdates: [],
+    };
+  if (options.nativeSystemMessages !== true)
+    return {
+      systemPrompt: getCurrentSystemPrompt(context.messages),
+      tools,
+      messages,
+      systemUpdates: [],
+    };
+
+  const initial = getInitialSystemMessage(context.messages);
+  const pending: string[] = [];
+  const systemUpdates: SystemUpdate[] = [];
+  let assistants = 0;
+  for (const [index, message] of context.messages.entries()) {
+    if (message.role === "system") {
+      if (index === 0 && message === initial) continue;
+      const text = renderSystemMessageUpdate(message);
+      if (text.length > 0) pending.push(text);
+    } else if (isSentAssistant(message)) {
+      for (const text of pending.splice(0))
+        systemUpdates.push({ beforeAssistant: assistants, text });
+      assistants += 1;
+    }
+  }
+  for (const text of pending) systemUpdates.push({ beforeAssistant: null, text });
   return {
-    systemPrompt: transcript
-      ? getCurrentSystemPrompt(context.messages)
-      : "systemPrompt" in context
-        ? (context.systemPrompt ?? "")
-        : "",
-    tools: transcript
-      ? getCurrentTools(context.messages)
-      : "tools" in context
-        ? (context.tools ?? [])
-        : [],
-    messages: context.messages.filter((m) => m.role !== "system"),
+    systemPrompt: initial === undefined ? "" : getSystemMessageText(initial),
+    tools,
+    messages,
+    systemUpdates,
   };
 }
 

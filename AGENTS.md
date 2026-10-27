@@ -54,11 +54,13 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 - `src/signed-thinking.ts`: Claude's raw signed thinking blocks, stored on pi's assistant message under `piClaudeCli` by the event bridge (never in `diagnostics`: pi's bug report collects those) and replayed by a structured import only while the message is unchanged. Pure; imported eagerly through `event-bridge`.
 - `src/cli-auth.ts`: `claude auth status` as pi's auth check (models offered while the CLI is installed and not logged out; a subscription reports as OAuth for pi's "(sub)" label), kept in `auth-status.json` under the state directory and refreshed in the background, because pi waits for auth checks at start. Pure apart from the probe and the file; loaded at pi start.
 - `src/usage-credits.ts`: the usage-credit guard's rule and messages; every message says "billing" so pi does not retry it.
-- `src/subscription-env.ts`: the variables that would move the CLI off the subscription login, for launches, the model probe and the auth check.
+- `src/subscription-env.ts`: the variables that would move the CLI off the subscription login, and the installation in use (`PI_CLAUDE_CLI_COMMAND`, `PI_CLAUDE_CLI_CONFIG_DIR`), for launches, the probes and the auth check.
 - `src/tool-call-id.ts`: tool call ids Claude would reject, mapped to valid ones in what is sent and back. pi's stored ids never change.
 - `src/thinking-config.ts`: pi thinking levels as CLI flags and live control requests.
 - `src/account-models.ts`, `src/model-probe.ts`: the model list. The first is pure and loaded at pi start: it joins the account's models with pi's catalogue and implements pi 1.x `refreshModels`. The second asks a short-lived CLI process for the account's models (`initialize`), and is loaded only when a refresh needs it.
 - `src/provider-config.ts`, `src/runtime-directory.ts`, `src/usage.ts`, `src/errors.ts`, `src/cli-requirements.ts`: configuration, the private temp directory, billing arithmetic, tagged errors, minimum CLI version.
+- `src/turn-relay.ts`: the loopback relay between a CLI process and `api.anthropic.com` (`PI_CLAUDE_CLI_RELAY=shadow|rewrite`), in the process scope; records each request as a content-free `TurnRelay.request` span. It forwards the CLI's own authorization header and never records it.
+- `src/relay-rewrite.ts`: pure request rewrites: Claude Code's session context back to message 0 (both 2.1.299 layouts), and pi's later system messages placed where they occurred. Fail closed: anything unrecognized is sent as it came.
 - `src/tracing.ts`, `src/trace-location.ts`, `scripts/trace.ts`: the span sink and the trace CLI.
 
 ## Invariants
@@ -68,7 +70,7 @@ node scripts/scenarios.ts --keep warm-turn    # one scenario; keeps its trace fi
 3. Tool calls reach pi as real toolCall blocks; the CLI waits for the matching pi result. The CLI has no native tools.
 4. Nothing is written to pi's status line or to conversation content except the model's own output. A pi message also gets the fields pi's own Anthropic provider sets (`responseId`, `rawStopReason`, the usage breakdown, `providerThinkingLevel`) one `diagnostics` entry, the subscription's latest limit status, and the `piClaudeCli` key, which holds the model's signed thinking as the API returned it. `diagnostics` stay content-free: pi's bug report collects them. Effect's console logger is replaced: logs are span events.
 5. CLI sessions do not persist. No transcript, no resume. Trace files are not a transcript: they hold ids, names, sizes, counts and durations, never prompt text, tool arguments or tool results (unless `PI_CLAUDE_CLI_TRACE_WIRE=raw` is set on purpose).
-6. Preserve host/managed guards and official subscription authentication. Never extract OAuth tokens. Never forward a variable of `SUBSCRIPTION_OVERRIDE_ENV_VARS` (`src/subscription-env.ts`: API keys and tokens, `ANTHROPIC_BASE_URL`, other model providers' switches) to the CLI. A model call charged to usage credits ends the episode unless the user allowed it.
+6. Preserve host/managed guards and official subscription authentication. Never extract OAuth tokens. Never forward a variable of `SUBSCRIPTION_OVERRIDE_ENV_VARS` (`src/subscription-env.ts`: API keys and tokens, `ANTHROPIC_BASE_URL`, other model providers' switches) to the CLI; the only base URL it gets is its own relay's. A model call charged to usage credits ends the episode unless the user allowed it.
 7. Report errors as assistant error events and aborts as aborted. Never return a raw string where pi expects an assistant message. Only `src/provider-runtime.ts` and `index.ts` end a pi stream.
 
 ## Conventions
