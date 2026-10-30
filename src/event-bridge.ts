@@ -170,14 +170,25 @@ export function mapStopReason(
   }
 }
 
-/** JSON text with object keys sorted, so equal values have equal text. */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+/**
+ * JSON text with sorted keys. For comparison only, optionally reproduce
+ * Claude Code 2.1.312's decoding of literal Unicode escapes in string values.
+ * Backslash pairs stay literal, and decoding runs once, not recursively.
+ */
+function canonicalJson(value: unknown, decodeUnicodeEscapes = false): string {
+  if (typeof value === "string" && decodeUnicodeEscapes)
+    return JSON.stringify(
+      value.replace(/\\(?:\\|u([0-9a-fA-F]{4}))/g, (match, hex: string | undefined) =>
+        hex === undefined ? match : String.fromCharCode(Number.parseInt(hex, 16)),
+      ),
+    );
+  if (Array.isArray(value))
+    return `[${value.map((child) => canonicalJson(child, decodeUnicodeEscapes)).join(",")}]`;
   if (typeof value === "object" && value !== null)
     return `{${Object.entries(value)
       .filter(([, child]) => child !== undefined)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`)
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child, decodeUnicodeEscapes)}`)
       .join(",")}}`;
   return JSON.stringify(value) ?? "null";
 }
@@ -857,7 +868,11 @@ export function createEventBridge(
       if (
         content?.type === "toolCall" &&
         typeof content.arguments === "object" &&
-        canonicalJson(content.arguments) !== canonicalJson(expected.input ?? {})
+        canonicalJson(content.arguments) !== canonicalJson(expected.input ?? {}) &&
+        // The CLI's assistant record may decode literal \\uXXXX sequences.
+        // Compare that known transformation too, but never alter pi's arguments:
+        // the stream is the model's code, the record is not byte-faithful.
+        canonicalJson(content.arguments, true) !== canonicalJson(expected.input ?? {})
       )
         return differs;
     }

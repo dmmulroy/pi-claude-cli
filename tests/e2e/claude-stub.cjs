@@ -216,7 +216,7 @@ let messageSeq = 0;
 /** The id of the API message being streamed. */
 let messageId;
 /** The current turn's keywords that change what is streamed or reported. */
-let turnFlags = { overage: false, mismatch: false };
+let turnFlags = { overage: false, mismatch: false, unicodeEscapes: false };
 
 const messageStart = () => {
   messageId = `msg_stub_${process.pid}_${++messageSeq}`;
@@ -312,7 +312,8 @@ const endInterruptedTurn = () => {
 
 /** One assistant message asking for each named pi tool, then their calls. */
 const toolTurn = async (piToolNames) => {
-  const input = { path: "stub.txt" };
+  const input = { path: turnFlags.unicodeEscapes ? String.raw`\u0041.txt` : "stub.txt" };
+  const recordedInput = turnFlags.unicodeEscapes ? { path: "A.txt" } : input;
   const uses = piToolNames.map((piToolName, index) => {
     const mcpName = listedToolFor(piToolName);
     return {
@@ -339,7 +340,7 @@ const toolTurn = async (piToolNames) => {
       index: use.index,
       delta: { type: "input_json_delta", partial_json: JSON.stringify(input) },
     });
-    recordBlock({ type: "tool_use", id: use.toolUseId, name: use.name, input });
+    recordBlock({ type: "tool_use", id: use.toolUseId, name: use.name, input: recordedInput });
     streamEvent({ type: "content_block_stop", index: use.index });
   }
 
@@ -358,7 +359,7 @@ const toolTurn = async (piToolNames) => {
     uses.map((use) =>
       mcp("tools/call", {
         name: use.mcpName,
-        arguments: input,
+        arguments: recordedInput,
         _meta: { "claudecode/toolUseId": use.toolUseId, progressToken: rpcSeq },
       }),
     ),
@@ -383,6 +384,7 @@ const startTurn = (text) => {
   turnFlags = {
     overage: text.includes("overage"),
     mismatch: text.includes("mismatch"),
+    unicodeEscapes: text.includes("unicode-escapes"),
   };
   const tool = /tools?:([A-Za-z0-9_.,-]+)/.exec(text);
   if (tool) {

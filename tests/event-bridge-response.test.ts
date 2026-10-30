@@ -317,6 +317,39 @@ describe("checking the stream against the CLI's record", () => {
     expect(bridge.streamMismatch()).toMatch(/differs from the Claude CLI/);
   });
 
+  it.each([
+    [String.raw`/\uFFFC/g`, "/\uFFFC/g"],
+    [String.raw`/[￼\u200c]/g`, "/[\uFFFC\u200c]/g"],
+    [String.raw`echo '\u0041'`, "echo 'A'"],
+    [String.raw`\uD83D\uDE00`, "😀"],
+  ])(
+    "accepts the CLI's Unicode escape decoding without changing streamed code: %s",
+    (code, decoded) => {
+      const input = { path: "a.txt", nested: [{ code }] };
+      const bridge = bridgeOf([start("msg_1"), ...toolUse(0, "toolu_1", JSON.stringify(input))]);
+      bridge.recordAssistantBlocks("msg_1", [
+        { ...recordedTool, input: { path: "a.txt", nested: [{ code: decoded }] } },
+      ]);
+      expect(bridge.streamMismatch()).toBeUndefined();
+      expect(bridge.getOutput().content).toContainEqual(
+        expect.objectContaining({ type: "toolCall", arguments: input }),
+      );
+    },
+  );
+
+  it.each([
+    [String.raw`\\u0041`, "A"],
+    [String.raw`\u005cu0041`, "A"],
+    [String.raw`\n`, "\n"],
+    [String.raw`\x41`, "A"],
+    [String.raw`\u0041`, "B"],
+    ["A", String.raw`\u0041`],
+  ])("still rejects unrelated argument changes: %s", (code, recorded) => {
+    const bridge = bridgeOf([start("msg_1"), ...toolUse(0, "toolu_1", JSON.stringify({ code }))]);
+    bridge.recordAssistantBlocks("msg_1", [{ ...recordedTool, input: { code: recorded } }]);
+    expect(bridge.streamMismatch()).toMatch(/differs from the Claude CLI/);
+  });
+
   it("leaves arguments that did not arrive as an object to pi", () => {
     const bridge = bridgeOf([start("msg_1"), ...toolUse(0, "toolu_1", '{"path": "a.t')]);
     bridge.recordAssistantBlocks("msg_1", [recordedTool]);

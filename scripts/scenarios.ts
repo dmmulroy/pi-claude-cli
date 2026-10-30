@@ -478,6 +478,16 @@ const SCENARIOS: ReadonlyArray<Scenario> = [
     ],
   ),
   scenario(
+    "tool-unicode-escapes",
+    "CLI Unicode escape decoding in the record preserves the streamed tool arguments and warm handoff",
+    [
+      [...episode("mode=spawn", "outcome=toolUse"), ...count(1)],
+      [...episode("mode=handoff", "outcome=done"), ...count(1)],
+      [...span("toolCall", "outcome=ok"), ...count(1)],
+      [...span("ClaudeProcess.retire", "cause=failure"), "--max-count", "0"],
+    ],
+  ),
+  scenario(
     "response-fields",
     "pi's message carries the response id, raw stop reason, usage breakdown and diagnostics",
     [

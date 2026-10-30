@@ -693,6 +693,19 @@ const scenarios: Record<
       yield* Effect.sleep("200 millis");
     }),
 
+  "tool-unicode-escapes": (session) =>
+    Effect.gen(function* () {
+      const answer = yield* session.say("tool:read unicode-escapes");
+      yield* expectToolCalls(answer, ["read"]);
+      const call = answer.content.find((block) => block.type === "toolCall");
+      yield* expect(
+        call?.type === "toolCall" && call.arguments.path === String.raw`\u0041.txt`,
+        "expected pi to receive the literal Unicode escape from the stream",
+      );
+      yield* session.answerToolCalls("CONTENT");
+      yield* expectDone(yield* session.call(), "TOOL-DONE CONTENT");
+    }),
+
   "response-fields": (session) =>
     Effect.gen(function* () {
       const answer = yield* session.say("think");
