@@ -123,6 +123,18 @@ const ClaudeRateLimitInfo = Schema.Struct({
   isUsingOverage: Schema.optional(Schema.NullOr(Schema.Boolean)),
   overageStatus: Schema.optional(Schema.NullOr(Schema.String)),
   overageDisabledReason: Schema.optional(Schema.NullOr(Schema.String)),
+  /** How much of each limit window is used, from 0 to 1. */
+  unifiedWindows: Schema.optional(
+    Schema.NullOr(
+      Schema.Record(
+        Schema.String,
+        Schema.Struct({
+          utilization: Schema.optional(Schema.NullOr(Schema.Number)),
+          resetsAt: Schema.optional(Schema.NullOr(Schema.Number)),
+        }),
+      ),
+    ),
+  ),
 });
 
 /**

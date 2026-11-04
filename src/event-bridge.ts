@@ -202,6 +202,10 @@ function rateLimitDetails(info: ClaudeRateLimitInfo): JsonObject {
   for (const [key, value] of Object.entries(info))
     if (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
       details[key] = value;
+  for (const [window, state] of Object.entries(info.unifiedWindows ?? {})) {
+    if (state.utilization != null) details[`${window}_utilization`] = state.utilization;
+    if (state.resetsAt != null) details[`${window}_resetsAt`] = state.resetsAt;
+  }
   return details;
 }
 
