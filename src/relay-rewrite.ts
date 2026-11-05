@@ -100,6 +100,11 @@ const soleText = (message: Json | undefined): string | undefined => {
  *   import:      m0 [prompt]           m1 system "env"
  *                ... user [context, text]  system "Today's date is D."
  *                ... user [tool_result [X + "\n", context]]  system "Today's date is D."
+ *                ... user [tool_result, ..., text, context]  system "Today's date is D."
+ *
+ * The last form is Claude Code 2.1.312's for tool results followed by a user
+ * message (pi's steering messages, or a prompt after an abort), which the
+ * API merges into one: the context is appended after the user's text.
  *
  * @returns The rewritten request, `unchanged` with nothing to move, or
  *   undefined for a layout it does not know.
@@ -122,6 +127,18 @@ const systemLayoutSessionContext = (
     if (isContext(content[0]) && content.length >= 2) {
       at = index;
       take = () => content.shift() as Block;
+      break;
+    }
+    const lastIndex = content.length - 1;
+    if (
+      lastIndex >= 2 &&
+      isContext(content[lastIndex]) &&
+      textOf(content[lastIndex - 1]) !== undefined &&
+      !isReminder(content[lastIndex - 1]) &&
+      content.some((block) => isObject(block) && block["type"] === "tool_result")
+    ) {
+      at = index;
+      take = () => content.pop() as Block;
       break;
     }
     const result = content.find(

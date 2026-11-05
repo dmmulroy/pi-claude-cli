@@ -142,6 +142,8 @@ older models     first turn  m0 [env, model, context, date, prompt]
                  import      m0 [env, model, prompt] … last [… context, date]
 system-message   first turn  m0 [context, prompt]  m1 system "env … date"
 models           import      m0 [prompt]  m1 system "env" … last [context, …]  system "date"
+                 import, tool results then a user message (2.1.312)
+                             … last [tool_result, …, text, context]  system "date"
 ```
 
 **pi's system messages.** pi can add a system message mid-conversation (a prompt section changed, an instruction for what follows). On a model that takes system messages mid-conversation (Opus 4.8, the 5-series), with `rewrite`, the relay sends each one where it occurred, before the assistant message that followed it, as pi's own Anthropic provider does. The process launches with the leading prompt, so an update needs no fresh process and keeps the cache. On other models, or with the relay off or in `shadow`, every system message is folded into the current prompt, and a changed prompt starts a fresh process.

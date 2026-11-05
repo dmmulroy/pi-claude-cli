@@ -195,6 +195,34 @@ describe("canonicalSessionContext, system-message layout", () => {
     expect(messages).toHaveLength(4);
   });
 
+  // Claude Code 2.1.312, when pi's history ends with tool results and then a
+  // user message (a steering message, or a prompt after an abort): the API
+  // merges them, and the CLI appends the context after the user's text.
+  it("moves them back from a steering message after tool results", () => {
+    const toolResult = {
+      type: "tool_result",
+      tool_use_id: "toolu_1",
+      content: [text("out\n")],
+    };
+    const { outcome, messages } = rewrite([
+      { role: "user", content: [text(PROMPT)] },
+      { role: "system", content: ENVIRONMENT },
+      assistantTurn,
+      { role: "user", content: [toolResult, text("also do y"), text(CONTEXT)] },
+      { role: "system", content: [text(DATE_TEXT, { cache_control: BREAKPOINT })] },
+      { role: "assistant", content: [text("ok")] },
+      { role: "user", content: [text("next")] },
+    ]);
+    expect(outcome).toBe("moved");
+    expect(messages.slice(0, 2)).toEqual(firstTurn);
+    expect(messages.slice(2)).toEqual([
+      assistantTurn,
+      { role: "user", content: [toolResult, text("also do y", { cache_control: BREAKPOINT })] },
+      { role: "assistant", content: [text("ok")] },
+      { role: "user", content: [text("next")] },
+    ]);
+  });
+
   it("leaves a first turn alone and refuses a context without its date", () => {
     expect(rewrite(firstTurn).outcome).toBe("unchanged");
     expect(
