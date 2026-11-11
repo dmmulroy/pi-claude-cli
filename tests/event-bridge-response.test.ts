@@ -231,6 +231,28 @@ describe("the response's fields", () => {
     });
     expect(diagnostics[0]?.details).not.toHaveProperty("overageStatus");
   });
+
+  it("adds each limit window's usage to the diagnostic, skipping values it lacks", () => {
+    const bridge = bridgeOf();
+    bridge.recordRateLimit(
+      {
+        status: "allowed",
+        unifiedWindows: {
+          seven_day: { utilization: 0.18, resetsAt: 1_793_952_000 },
+          five_hour: { utilization: null },
+          seven_day_sonnet: { utilization: 0, resetsAt: 0 },
+        },
+      },
+      1,
+    );
+    expect(bridge.getOutput().diagnostics?.[0]?.details).toEqual({
+      status: "allowed",
+      seven_day_utilization: 0.18,
+      seven_day_resetsAt: 1_793_952_000,
+      seven_day_sonnet_utilization: 0,
+      seven_day_sonnet_resetsAt: 0,
+    });
+  });
 });
 
 describe("checking the stream against the CLI's record", () => {
