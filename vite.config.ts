@@ -34,6 +34,7 @@ export default defineConfig({
       include: [
         "src/account-models.ts",
         "src/cli-auth.ts",
+        "src/cli-update.ts",
         "src/event-bridge.ts",
         "src/overflow.ts",
         "src/pi-context.ts",

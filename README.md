@@ -39,6 +39,15 @@ Claude Code owns the login. This package never reads, copies or refreshes your c
 
 pi lists the models while `claude auth status` says you are logged in, and labels their cost "(sub)" on a Pro or Max plan. The answer is cached on disk and refreshed in the background, so pi starts without waiting for the CLI.
 
+## Keeping Claude Code current
+
+The model list is the one your installed `claude` reports, so a model newer than your CLI (Fable 5.2 needs Claude Code 2.1.321) does not appear until you update it. At startup, in the background, pi-claude-cli compares `claude --version` with the newest release on npm (on the `stable` channel when Claude Code's `autoUpdatesChannel` is `stable`). npm is asked at most once a day. When an update is out, it asks whether to run `claude update`, then refreshes the model list. If you decline, it does not ask again until a newer version is released.
+
+| To…                 | Run                                        |
+| ------------------- | ------------------------------------------ |
+| check for an update | `/pi-claude-cli-status`                    |
+| update now          | `/pi-claude-cli-update` or `claude update` |
+
 ## How a call works
 
 Every pi model call is one **episode**. It borrows a Claude process, streams the answer to pi, and parks the process for the next call.

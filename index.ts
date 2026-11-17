@@ -20,7 +20,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   builtinProviderModels,
   createModelRefresh,
@@ -35,6 +35,16 @@ import {
   probeCliAuthStatus,
   providerAuthCheck,
 } from "./src/cli-auth.ts";
+import {
+  type CliUpdateChecker,
+  createCliUpdateChecker,
+  defaultCliUpdateFile,
+  defaultCliUpdateProbes,
+  describeCliUpdate,
+  fileCliUpdateStore,
+  probeInstalledCliVersion,
+  runCliUpdate,
+} from "./src/cli-update.ts";
 import { createEventBridge } from "./src/event-bridge.ts";
 import { resolveProviderSettings } from "./src/provider-env.ts";
 import { rewriteOverflowMessage } from "./src/overflow.ts";
@@ -68,6 +78,16 @@ const cliAuthStatus = (): CliAuthStatusCache =>
     probeCliAuthStatus,
     fileCliAuthStatusStore(defaultCliAuthStatusFile()),
   ));
+
+let sharedCliUpdate: CliUpdateChecker | undefined;
+/** The CLI update check, one for the whole pi process, built on first use. */
+const cliUpdate = (): CliUpdateChecker =>
+  (sharedCliUpdate ??= createCliUpdateChecker(
+    defaultCliUpdateProbes(),
+    fileCliUpdateStore(defaultCliUpdateFile()),
+  ));
+/** pi runs the factory once per session; the startup offer is made once per process. */
+let cliUpdateOffered = false;
 
 /** End a stream whose provider runtime could not even be loaded. */
 function failStream(
@@ -171,11 +191,81 @@ export default function (pi: ExtensionAPI) {
       rewriteOverflowMessage(event.message, ctx.model?.provider),
     );
 
+    /**
+     * Tell the user when a newer Claude Code is out and offer `claude update`.
+     * At startup it stays quiet unless an update is out that the user has not
+     * declined; from the command it always answers and asks npm afresh.
+     */
+    const offerCliUpdate = async (
+      ctx: ExtensionContext,
+      { requested }: { readonly requested: boolean },
+    ): Promise<void> => {
+      const check = await cliUpdate().check({ force: requested });
+      if (!requested && (check === undefined || !check.updateAvailable || check.declined)) return;
+      const { level, message } = describeCliUpdate(check);
+      if (check === undefined || !check.updateAvailable) {
+        ctx.ui.notify(message, level);
+        return;
+      }
+      const accepted = await ctx.ui.confirm(
+        "Update Claude Code?",
+        `${message}\n\nRun \`claude update\` now?`,
+      );
+      if (!accepted) {
+        await cliUpdate().decline(check.available);
+        ctx.ui.notify(
+          `Claude Code ${check.available} skipped. Run /pi-claude-cli-update or \`claude update\` to update later.`,
+          "info",
+        );
+        return;
+      }
+      ctx.ui.notify(`Updating Claude Code to ${check.available}…`, "info");
+      const result = await runCliUpdate();
+      const installed = await probeInstalledCliVersion();
+      if (!result.ok || installed === check.installed) {
+        ctx.ui.notify(
+          `\`claude update\` did not update Claude Code ${check.installed}. Run it in a terminal to see why.${
+            result.output.length > 0 ? `\n${result.output}` : ""
+          }`,
+          "error",
+        );
+        return;
+      }
+      // Parked processes run the old binary; the model list is the old CLI's.
+      await retireParked();
+      await ctx.modelRegistry.refresh({
+        providers: [PROVIDER_ID],
+        force: true,
+        allowNetwork: true,
+      });
+      ctx.ui.notify(
+        `Claude Code updated to ${installed ?? check.available}; the pi-claude-cli model list is refreshed.`,
+        "info",
+      );
+    };
+
+    pi.on("session_start", (event, ctx) => {
+      if (cliUpdateOffered || event.reason !== "startup" || !ctx.hasUI) return;
+      cliUpdateOffered = true;
+      // In the background: pi start does not wait for the CLI or npm. A
+      // session replaced meanwhile leaves a stale ctx; its calls may throw.
+      void offerCliUpdate(ctx, { requested: false }).catch(() => undefined);
+    });
+
     pi.registerCommand("pi-claude-cli-status", {
-      description: "Check that Claude Code is installed and logged in",
+      description: "Check that Claude Code is installed, logged in and up to date",
       handler: async (_args, ctx) => {
         const { level, message } = describeCliAuthStatus(await authStatus.refresh());
         ctx.ui.notify(message, level);
+        const update = describeCliUpdate(await cliUpdate().check({ force: true }));
+        ctx.ui.notify(update.message, update.level);
+      },
+    });
+
+    pi.registerCommand("pi-claude-cli-update", {
+      description: "Update Claude Code (`claude update`) when a newer version is out",
+      handler: async (_args, ctx) => {
+        await offerCliUpdate(ctx, { requested: true });
       },
     });
 
