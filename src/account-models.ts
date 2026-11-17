@@ -269,6 +269,12 @@ export function createModelRefresh(
         isAccountModelsFresh(context.stored, now())
       )
         return stored;
+      // The first run of a CLI version answers before it has fetched the
+      // account's feature flags, and those list the newest models: 2.1.326's
+      // first answer after `claude update` lacked Fable 5.2 (13 models, then
+      // 14). That run fetches the flags, so on a version change the second
+      // answer is the one kept.
+      if (context.stored?.etag !== tag) await probe.models(context.signal);
       const models = providerModelsForAccount(catalogue, await probe.models(context.signal));
       if (models === undefined) return fallback;
       await context.publish({

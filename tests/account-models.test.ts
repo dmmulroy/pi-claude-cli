@@ -319,15 +319,40 @@ describe("createModelRefresh", () => {
     const probe = cli();
     const ctx = context({ stored: storedEntry(now - 60_000, "2.1.292") });
     await createModelRefresh(catalogue, probe, () => now)(ctx);
-    expect(probe.models).toHaveBeenCalledTimes(1);
+    expect(probe.models).toHaveBeenCalledTimes(2);
     expect(ctx.publish.mock.calls[0][0].persist?.etag).toBe("claude-code/2.1.299");
+  });
+
+  it("keeps a new CLI version's second answer: its first lacks the newest models", async () => {
+    // 2.1.326 right after `claude update`: Fable 5.2 only once the flags are in.
+    const first: CliAccountModel[] = [{ value: "claude-fable-5-1" }];
+    const second: CliAccountModel[] = [
+      ...first,
+      { value: "fable", resolvedModel: "claude-fable-5-2" },
+    ];
+    const answers = [first, second];
+    const probe = cli(async () => answers.shift() ?? second);
+    const ctx = context({ stored: storedEntry(now - 60_000, "2.1.312") });
+    const models = await createModelRefresh(catalogue, probe, () => now)(ctx);
+    expect(ids(models)).toContain("claude-fable-5-2");
+    expect(ids(ctx.publish.mock.calls[0][0].persist?.models)).toContain("claude-fable-5-2");
+  });
+
+  it("asks once when the CLI version is the stored one", async () => {
+    const probe = cli();
+    await createModelRefresh(
+      catalogue,
+      probe,
+      () => now,
+    )(context({ stored: storedEntry(now - 1), force: true }));
+    expect(probe.models).toHaveBeenCalledTimes(1);
   });
 
   it("asks again for a list stored without a CLI version", async () => {
     const probe = cli();
     const { etag: _, ...unversioned } = storedEntry(now - 60_000);
     await createModelRefresh(catalogue, probe, () => now)(context({ stored: unversioned }));
-    expect(probe.models).toHaveBeenCalledTimes(1);
+    expect(probe.models).toHaveBeenCalledTimes(2);
   });
 
   it("asks again when the stored list is a day old, or pi forces it", async () => {
@@ -336,6 +361,7 @@ describe("createModelRefresh", () => {
 
     await refresh(context({ stored: storedEntry(now - ACCOUNT_MODELS_TTL_MILLIS - 1) }));
     await refresh(context({ stored: storedEntry(now - 1), force: true }));
+    // Same CLI version both times: one answer each.
     expect(probe.models).toHaveBeenCalledTimes(2);
   });
 
